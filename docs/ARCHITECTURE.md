@@ -162,7 +162,31 @@ The storage model should optimize for:
 - straightforward recovery after restart
 - cheap reads for the dashboard
 
-A lightweight embedded database plus filesystem-backed logs and artifacts is the obvious first shape.
+# What persistence approach should `cid` use?
+
+The default persistence model should be hybrid:
+
+- SQLite for structured state
+- the filesystem for logs and retained artifacts
+
+SQLite is the best fit for data that needs querying, deduplication, and transactional updates, such as:
+
+- repositories
+- branch rules
+- discovered commits
+- runs
+- run steps
+- statuses and timestamps
+- lightweight aggregate statistics
+
+The filesystem is the better fit for append-heavy or larger opaque outputs, such as:
+
+- per-step logs
+- exported reports
+- retained artifacts
+
+This split keeps the storage model practical.
+Trying to force logs and artifacts into the database from day one would add complexity without making the product better.
 
 # How should the web API fit into the system?
 

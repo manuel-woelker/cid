@@ -76,6 +76,18 @@ It should be useful as an operations surface for local development workflows.
 
 The data should stay local and inspectable.
 
+# How should `cid` persist that data?
+
+The default persistence approach should be hybrid:
+
+- SQLite for structured state
+- the filesystem for logs and retained artifacts
+
+SQLite is the right fit for repositories, commits, runs, step metadata, statuses, timestamps, and summary statistics.
+The filesystem is the right fit for per-step logs and retained artifact files.
+
+That gives `cid` cheap local queries for the dashboard without turning the database into a dumpster for large append-only output.
+
 # What should the first version optimize for?
 
 The first version should optimize for:

@@ -197,7 +197,12 @@ Likely data to persist:
 - artifact references
 - aggregated stats for the dashboard
 
-A lightweight embedded database is probably enough for a long time.
+The default persistence model should be hybrid:
+
+- SQLite for structured state like repositories, commits, runs, step metadata, and statistics
+- filesystem-backed storage for per-step logs and retained artifacts
+
+That keeps dashboard queries cheap without stuffing large append-only logs into the database.
 
 ## Future ideas
 
