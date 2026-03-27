@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release -p cid --locked
+
+      - name: Package release artifacts
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          TARGET_TRIPLE: x86_64-unknown-linux-gnu
+        run: |
+          set -euo pipefail
+          ARCHIVE_BASENAME="cid-${TAG_NAME}-${TARGET_TRIPLE}"
+          ARTIFACT_DIR="dist/${ARCHIVE_BASENAME}"
+
+          mkdir -p "${ARTIFACT_DIR}"
+          cp target/release/cid "${ARTIFACT_DIR}/cid"
+          cp README.md "${ARTIFACT_DIR}/README.md"
+
+          tar -C dist -czf "dist/${ARCHIVE_BASENAME}.tar.gz" "${ARCHIVE_BASENAME}"
+          sha256sum "dist/${ARCHIVE_BASENAME}.tar.gz" > "dist/${ARCHIVE_BASENAME}.sha256"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256

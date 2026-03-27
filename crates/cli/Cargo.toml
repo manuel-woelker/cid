@@ -4,5 +4,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
+description = "CLI entrypoint for cid"
 
 [dependencies]
+cid-base = { path = "../base", version = "0.1.0" }

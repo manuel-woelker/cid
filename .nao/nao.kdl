@@ -1,0 +1,54 @@
+recipe "default" {
+  task "build" description="Build the cid workspace" {
+    run shell="""
+      cargo build \
+        --workspace \
+        --all-targets \
+        --all-features
+    """
+  }
+
+  task "fmt" description="Check code formatting" {
+    run shell="""
+      cargo fmt \
+        --all \
+        --check
+    """
+  }
+
+  task "clippy" description="Run clippy across the workspace" {
+    depends-on "build"
+    run shell="""
+      cargo clippy \
+        --workspace \
+        --all-targets \
+        --all-features \
+        -- \
+        -D warnings
+    """
+  }
+
+  task "test" description="Run the test suite" {
+    depends-on "build"
+    run shell="""
+      cargo test \
+        --workspace \
+        --all-targets \
+        --all-features
+    """
+  }
+
+  task "check" description="Run all repository verification tasks" {
+    depends-on "fmt"
+    depends-on "clippy"
+    depends-on "test"
+    run shell="""
+      printf 'All repository verification tasks completed.\n'
+    """
+  }
+
+  task "check-code" description="Run the full repository verification task graph" {
+    depends-on "check"
+    run script="./scripts/check-code.sh"
+  }
+}

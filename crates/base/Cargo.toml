@@ -1,0 +1,19 @@
+[package]
+name = "cid-base"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+description = "Shared base utilities for cid"
+
+[dev-dependencies]
+expect-test = { workspace = true }
+
+[dependencies]
+anstream = { workspace = true }
+ecow = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+tracing-error = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -1,1 +1,9 @@
 /target
+/.idea
+/.nao/*
+!/.nao/.gitignore
+!/.nao/nao.kdl
+/dist
+/.cache
+perf.data*
+flamegraph.svg
