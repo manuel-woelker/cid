@@ -4,6 +4,8 @@
 !/.nao/.gitignore
 !/.nao/nao.kdl
 /dist
+/sandboxes/*
+!/sandboxes/.gitkeep
 /.cache
 perf.data*
 flamegraph.svg
