@@ -9,4 +9,5 @@ description = "Daemon runtime for cid"
 [dependencies]
 cid-base = { path = "../base", version = "0.1.0" }
 serde = { workspace = true }
+serde_yaml = { workspace = true }
 tracing = { workspace = true }

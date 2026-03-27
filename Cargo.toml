@@ -13,6 +13,7 @@ anstream = "1.0.0"
 ecow = "0.2.6"
 parking_lot = "0.12.5"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_yaml = "0.9.34"
 tracing = "0.1.44"
 tracing-error = "0.2.1"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
