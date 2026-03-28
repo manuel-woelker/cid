@@ -31,7 +31,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build release binary
-        run: cargo build --release -p cid --locked
+        run: cargo build --release -p cid-server --locked
 
       - name: Package release artifacts
         env:
