@@ -1,3 +1,4 @@
+use cid_base::logging::{debug, info, warn};
 use cid_base::shared_string::SharedString;
 use cid_pal::pal::PalHandle;
 use cid_pal::process_command::ProcessCommand;
@@ -23,6 +24,12 @@ impl RepositoryWatcher {
         existing_commits: &[DiscoveredCommit],
         now_ms: u64,
     ) -> Vec<DiscoveredCommit> {
+        debug!(
+            repository_count = repositories.len(),
+            known_commit_count = existing_commits.len(),
+            poll_timestamp_ms = now_ms,
+            "polling repositories for tracked branch changes"
+        );
         let mut discoveries = Vec::new();
 
         for repository in repositories {
@@ -33,7 +40,19 @@ impl RepositoryWatcher {
                 .map(|branch_rule| branch_rule.branch().to_string())
                 .collect();
 
+            debug!(
+                repository = repository.name(),
+                path = %repository.path(),
+                branch_count = branches.len(),
+                "checking repository branches"
+            );
+
             for branch in branches {
+                debug!(
+                    repository = repository.name(),
+                    branch = %branch,
+                    "resolving tracked branch head"
+                );
                 match resolve_branch_head(&self.pal, repository, &branch) {
                     Ok(commit_sha) => {
                         repository.mark_seen(now_ms);
@@ -42,6 +61,12 @@ impl RepositoryWatcher {
                                 && existing.branch() == branch
                                 && existing.commit_sha() == commit_sha
                         }) {
+                            info!(
+                                repository = repository.name(),
+                                branch = %branch,
+                                commit_sha = %commit_sha,
+                                "discovered new commit"
+                            );
                             discoveries.push(DiscoveredCommit::new(
                                 repository.id(),
                                 repository.name(),
@@ -49,10 +74,23 @@ impl RepositoryWatcher {
                                 commit_sha,
                                 now_ms,
                             ));
+                        } else {
+                            debug!(
+                                repository = repository.name(),
+                                branch = %branch,
+                                commit_sha = %commit_sha,
+                                "branch head already known"
+                            );
                         }
                     }
                     Err(error) => {
                         repository_had_error = true;
+                        warn!(
+                            repository = repository.name(),
+                            branch = %branch,
+                            error = %error,
+                            "failed to resolve tracked branch"
+                        );
                         repository.mark_error(error);
                     }
                 }

@@ -1,3 +1,4 @@
+use cid_base::logging::info;
 use cid_base::result::CidResult;
 use cid_pal::pal::PalHandle;
 use cid_pal::process_command::ProcessCommand;
@@ -48,7 +49,15 @@ impl DockerRunner {
     }
 
     fn execute_run(&self, repository: &Repository, run: &mut Run) -> CidResult<()> {
-        run.start(self.now_ms());
+        let started_at_ms = self.now_ms();
+        info!(
+            run_id = run.id(),
+            repository = run.repository_name(),
+            branch = run.branch(),
+            commit_sha = run.commit_sha(),
+            "run started"
+        );
+        run.start(started_at_ms);
         let run_id = run.id();
 
         for step_index in 0..run.steps().len() {
@@ -89,6 +98,14 @@ impl DockerRunner {
                     );
 
                     if status == RunStatus::Failed {
+                        info!(
+                            run_id = run.id(),
+                            repository = run.repository_name(),
+                            branch = run.branch(),
+                            commit_sha = run.commit_sha(),
+                            status = %RunStatus::Failed.label(),
+                            "run completed"
+                        );
                         run.finish(finished_at_ms, RunStatus::Failed);
                         return Ok(());
                     }
@@ -106,13 +123,30 @@ impl DockerRunner {
                         Some(log_path),
                     );
                     run.push_event(finished_at_ms, message);
+                    info!(
+                        run_id = run.id(),
+                        repository = run.repository_name(),
+                        branch = run.branch(),
+                        commit_sha = run.commit_sha(),
+                        status = %RunStatus::Failed.label(),
+                        "run completed"
+                    );
                     run.finish(finished_at_ms, RunStatus::Failed);
                     return Ok(());
                 }
             }
         }
 
-        run.finish(self.now_ms(), RunStatus::Passed);
+        let finished_at_ms = self.now_ms();
+        info!(
+            run_id = run.id(),
+            repository = run.repository_name(),
+            branch = run.branch(),
+            commit_sha = run.commit_sha(),
+            status = %RunStatus::Passed.label(),
+            "run completed"
+        );
+        run.finish(finished_at_ms, RunStatus::Passed);
         Ok(())
     }
 

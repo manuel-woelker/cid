@@ -10,7 +10,7 @@ pub fn init_logging() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         let fmt_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::builder().parse_lossy("warn"));
+            .unwrap_or_else(|_| EnvFilter::builder().parse_lossy("info"));
 
         tracing_subscriber::registry()
             .with(ErrorLayer::default().with_filter(LevelFilter::INFO))
