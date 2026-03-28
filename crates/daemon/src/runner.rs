@@ -62,7 +62,7 @@ impl DockerRunner {
 
         for step_index in 0..run.steps().len() {
             let step = &run.steps()[step_index];
-            let command = self.build_command(repository.path(), step.image(), step.command());
+            let command = self.build_command(repository.path(), step.image(), step.command())?;
             let step_name = step.name().to_string();
             let mut sink = OutputCollector::default();
             let output = self.pal.run_process(&command, &mut sink);
@@ -159,24 +159,26 @@ impl DockerRunner {
         repository_path: &cid_base::file_path::FilePath,
         image: &str,
         command: &str,
-    ) -> ProcessCommand {
-        ProcessCommand {
+    ) -> CidResult<ProcessCommand> {
+        let workspace_mount_path = resolve_workspace_mount_path(repository_path)?;
+
+        Ok(ProcessCommand {
             executable: "docker".into(),
             arguments: vec![
                 "run".into(),
                 "--rm".into(),
                 "-v".into(),
-                format!("{}:/workspace", repository_path.as_path().display()).into(),
+                format!("{}:/workspace", workspace_mount_path.as_path().display()).into(),
                 "-w".into(),
                 "/workspace".into(),
                 image.into(),
                 "sh".into(),
-                "-lc".into(),
+                "-c".into(),
                 command.into(),
             ],
             working_directory: None,
             environment: Vec::new(),
-        }
+        })
     }
 
     fn now_ms(&self) -> u64 {
@@ -186,6 +188,19 @@ impl DockerRunner {
             .unwrap_or_default()
             .as_millis() as u64
     }
+}
+
+fn resolve_workspace_mount_path(
+    repository_path: &cid_base::file_path::FilePath,
+) -> CidResult<cid_base::file_path::FilePath> {
+    if repository_path.is_absolute() {
+        return Ok(repository_path.clone());
+    }
+
+    let current_dir = std::env::current_dir()?;
+    Ok(cid_base::file_path::FilePath::new(
+        current_dir.join(repository_path.as_path()),
+    ))
 }
 
 #[derive(Default)]
@@ -235,7 +250,9 @@ mod tests {
             PalHandle::new(pal),
         );
 
-        let command = runner.build_command(&FilePath::new("/repos/cid"), "rust:1.85", "cargo test");
+        let command = runner
+            .build_command(&FilePath::new("/repos/cid"), "rust:1.85", "cargo test")
+            .unwrap();
 
         assert_eq!(command.executable.as_str(), "docker");
         assert_eq!(
@@ -253,10 +270,32 @@ mod tests {
                 "/workspace",
                 "rust:1.85",
                 "sh",
-                "-lc",
+                "-c",
                 "cargo test",
             ]
         );
+    }
+
+    #[test]
+    fn docker_command_resolves_relative_workspace_mount_to_absolute_path() {
+        let pal = PalMock::new();
+        let runner = DockerRunner::new(
+            CidStateStore::new(FilePath::new("/tmp/cid-state")),
+            PalHandle::new(pal),
+        );
+
+        let command = runner
+            .build_command(
+                &FilePath::new("sandboxes/cid-rust-sandbox"),
+                "rust:1.85",
+                "cargo test",
+            )
+            .unwrap();
+
+        let mount = command.arguments[3].as_str();
+        let expected_prefix = format!("{}{}", std::env::current_dir().unwrap().display(), "/");
+        assert!(mount.starts_with(&expected_prefix));
+        assert!(mount.ends_with("sandboxes/cid-rust-sandbox:/workspace"));
     }
 
     #[test]
@@ -275,7 +314,7 @@ mod tests {
                     "/workspace".into(),
                     "rust:1.85".into(),
                     "sh".into(),
-                    "-lc".into(),
+                    "-c".into(),
                     "cargo test".into(),
                 ],
                 working_directory: None,

@@ -134,8 +134,12 @@ fn replay_run_response(store: &CidStateStore, run_id: &str) -> CidResult<HttpRes
     let Some(source_run) = find_run(&state, Some(run_id)).cloned() else {
         return Ok(text_response("404 Not Found", "run not found"));
     };
+    let Some(repository) = find_repository(&state, Some(source_run.repository_id())).cloned()
+    else {
+        return Ok(text_response("404 Not Found", "repository not found"));
+    };
 
-    let next_run = replay_run(&state, &source_run)?;
+    let next_run = replay_run(&state, &repository, &source_run)?;
     state.push_run(next_run.clone());
     store.save(&state)?;
 
@@ -146,7 +150,7 @@ fn replay_run_response(store: &CidStateStore, run_id: &str) -> CidResult<HttpRes
     ))
 }
 
-fn replay_run(state: &DaemonState, source_run: &Run) -> CidResult<Run> {
+fn replay_run(state: &DaemonState, repository: &Repository, source_run: &Run) -> CidResult<Run> {
     let next_run_id = state.runs().iter().map(Run::id).max().unwrap_or(0) + 1;
     let queued_at_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -160,15 +164,16 @@ fn replay_run(state: &DaemonState, source_run: &Run) -> CidResult<Run> {
         source_run.branch(),
         source_run.commit_sha(),
         queued_at_ms,
-        source_run
+        repository
+            .pipeline()
             .steps()
             .iter()
             .map(|step| {
                 cid_daemon::RunStep::new(
                     step.name(),
                     step.command(),
-                    step.image(),
-                    step.artifact_paths().to_vec(),
+                    repository.pipeline().image(),
+                    repository.pipeline().artifact_paths().to_vec(),
                 )
             })
             .collect(),
@@ -693,6 +698,7 @@ mod tests {
             replayed_run.steps()[0].status(),
             cid_daemon::RunStatus::Queued
         );
+        assert_eq!(replayed_run.steps()[0].image(), "rust:1.85");
         assert!(replayed_run.steps()[0].log_path().is_none());
     }
 
@@ -726,6 +732,7 @@ mod tests {
             started_at_ms: None,
             finished_at_ms: None,
             log_path: None,
+            image: "rust:1.85",
         });
         let newer_run = sample_run(SampleRun {
             id: 2,
@@ -736,6 +743,7 @@ mod tests {
             started_at_ms: Some(110),
             finished_at_ms: Some(120),
             log_path: None,
+            image: "rust:1.85",
         });
         let latest_run = sample_run(SampleRun {
             id: 3,
@@ -746,6 +754,7 @@ mod tests {
             started_at_ms: Some(140),
             finished_at_ms: Some(150),
             log_path: Some(latest_log_path.as_str()),
+            image: "alpine:3.20",
         });
 
         let state = DaemonState::new(
@@ -767,6 +776,7 @@ mod tests {
         started_at_ms: Option<u64>,
         finished_at_ms: Option<u64>,
         log_path: Option<&'a str>,
+        image: &'a str,
     }
 
     fn sample_run(sample: SampleRun<'_>) -> Run {
@@ -784,7 +794,7 @@ mod tests {
                 {
                     "name": "test",
                     "command": "cargo test",
-                    "image": "rust:1.85",
+                    "image": sample.image,
                     "status": sample.status,
                     "exit_code": null,
                     "started_at_ms": sample.started_at_ms,

@@ -13,6 +13,7 @@ use crate::watcher::RepositoryWatcher;
 
 #[derive(Debug)]
 pub struct CidDaemon {
+    config: CidConfig,
     pal: PalHandle,
     store: CidStateStore,
     watcher: RepositoryWatcher,
@@ -44,6 +45,7 @@ impl CidDaemon {
         store.save(&state)?;
 
         Ok(Self {
+            config: config.clone(),
             runner: DockerRunner::new(store.clone(), pal.clone()),
             scheduler: Scheduler::new(),
             watcher: RepositoryWatcher::new(pal.clone()),
@@ -84,6 +86,9 @@ impl CidDaemon {
     }
 
     pub fn run_cycle(&mut self) -> CidResult<RunCycleReport> {
+        let repositories = self.config.repositories(&*self.pal)?;
+        sync_repositories(&mut self.state, repositories);
+
         let now_ms = self.now_ms();
         let discoveries = self.watcher.poll(
             &mut self.state.repositories,
@@ -155,7 +160,25 @@ impl DaemonState {
 }
 
 fn sync_repositories(state: &mut DaemonState, repositories: Vec<Repository>) {
-    state.repositories = repositories;
+    let previous_repositories = state.repositories.clone();
+    let mut next_repositories = repositories;
+
+    for repository in &mut next_repositories {
+        if let Some(previous) = previous_repositories
+            .iter()
+            .find(|candidate| candidate.id() == repository.id())
+        {
+            if let Some(last_seen_at_ms) = previous.status().last_seen_at_ms() {
+                repository.mark_seen(last_seen_at_ms);
+            }
+
+            if let Some(last_error) = previous.status().last_error() {
+                repository.mark_error(last_error.to_string());
+            }
+        }
+    }
+
+    state.repositories = next_repositories;
 }
 
 #[cfg(test)]
@@ -184,5 +207,47 @@ mod tests {
         sync_repositories(&mut state, repositories.clone());
 
         assert_eq!(state.repositories(), repositories);
+    }
+
+    #[test]
+    fn repository_sync_preserves_repository_status() {
+        let mut existing = Repository::new(
+            1,
+            "cid",
+            FilePath::new("/repos/cid"),
+            vec![BranchRule::new("main")],
+            Pipeline::new(
+                "alpine:3.20",
+                vec![PipelineStep::new("test", "echo old")],
+                Vec::new(),
+            ),
+        );
+        existing.mark_seen(123);
+        existing.mark_error("watch failed");
+
+        let mut state = DaemonState::new(vec![existing], Vec::new(), Vec::new());
+        let repositories = vec![Repository::new(
+            1,
+            "cid",
+            FilePath::new("/repos/cid"),
+            vec![BranchRule::new("main")],
+            Pipeline::new(
+                "rust:1.85",
+                vec![PipelineStep::new("test", "cargo test")],
+                Vec::new(),
+            ),
+        )];
+
+        sync_repositories(&mut state, repositories);
+
+        assert_eq!(state.repositories()[0].pipeline().image(), "rust:1.85");
+        assert_eq!(
+            state.repositories()[0].status().last_seen_at_ms(),
+            Some(123)
+        );
+        assert_eq!(
+            state.repositories()[0].status().last_error(),
+            Some("watch failed")
+        );
     }
 }
