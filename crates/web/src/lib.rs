@@ -37,59 +37,78 @@ fn handle_connection(
         .read(&mut buffer)
         .context("failed to read HTTP request")?;
     let request = String::from_utf8_lossy(&buffer[..read]);
+    let method = request_method(&request);
     let path = request_path(&request);
 
-    let response = route_request(path, store, asset_source)?;
+    let response = route_request(method, path, store, asset_source)?;
     write_response(stream, &response)
 }
 
 fn route_request(
+    method: &str,
     path: &str,
     store: &CidStateStore,
     asset_source: &AssetSource,
 ) -> CidResult<HttpResponse> {
-    let state = store.load()?;
-
     if !path.starts_with("/api/") {
         return asset_response(path, asset_source);
     }
 
-    match api_path_segments(path).as_slice() {
-        ["api", "repositories"] => json_response(state.repositories()),
-        ["api", "repositories", repository_id] => {
+    match (method, api_path_segments(path).as_slice()) {
+        ("GET", ["api", "repositories"]) => {
+            let state = store.load()?;
+            json_response(state.repositories())
+        }
+        ("GET", ["api", "repositories", repository_id]) => {
+            let state = store.load()?;
             match find_repository(&state, repository_id.parse::<u64>().ok()) {
                 Some(repository) => json_response(repository),
                 None => Ok(text_response("404 Not Found", "repository not found")),
             }
         }
-        ["api", "repositories", repository_id, "branches"] => {
+        ("GET", ["api", "repositories", repository_id, "branches"]) => {
+            let state = store.load()?;
             match find_repository(&state, repository_id.parse::<u64>().ok()) {
                 Some(repository) => json_response(&branch_summaries(&state, repository)),
                 None => Ok(text_response("404 Not Found", "repository not found")),
             }
         }
-        [
-            "api",
-            "repositories",
-            repository_id,
-            "branches",
-            branch_name,
-        ] => match find_repository(&state, repository_id.parse::<u64>().ok()) {
-            Some(repository) => {
-                let branch_name = decode_path_segment(branch_name)?;
-                match branch_detail(&state, repository, &branch_name) {
-                    Some(detail) => json_response(&detail),
-                    None => Ok(text_response("404 Not Found", "branch not found")),
+        (
+            "GET",
+            [
+                "api",
+                "repositories",
+                repository_id,
+                "branches",
+                branch_name,
+            ],
+        ) => {
+            let state = store.load()?;
+            match find_repository(&state, repository_id.parse::<u64>().ok()) {
+                Some(repository) => {
+                    let branch_name = decode_path_segment(branch_name)?;
+                    match branch_detail(&state, repository, &branch_name) {
+                        Some(detail) => json_response(&detail),
+                        None => Ok(text_response("404 Not Found", "branch not found")),
+                    }
                 }
+                None => Ok(text_response("404 Not Found", "repository not found")),
             }
-            None => Ok(text_response("404 Not Found", "repository not found")),
-        },
-        ["api", "runs"] => json_response(state.runs()),
-        ["api", "runs", run_id] => match find_run(&state, run_id.parse::<u64>().ok()) {
-            Some(run) => json_response(run),
-            None => Ok(text_response("404 Not Found", "run not found")),
-        },
-        ["api", "runs", run_id, "steps", step_index, "log"] => {
+        }
+        ("GET", ["api", "runs"]) => {
+            let state = store.load()?;
+            json_response(state.runs())
+        }
+        ("GET", ["api", "runs", run_id]) => {
+            let state = store.load()?;
+            match find_run(&state, run_id.parse::<u64>().ok()) {
+                Some(run) => json_response(run),
+                None => Ok(text_response("404 Not Found", "run not found")),
+            }
+        }
+        ("POST", ["api", "runs", run_id, "replay"]) => replay_run_response(store, run_id),
+        ("GET", ["api", "runs", run_id, "steps", step_index, "log"]) => {
+            let state = store.load()?;
             match find_run(&state, run_id.parse::<u64>().ok()) {
                 Some(run) => match step_log_response(run, step_index.parse::<usize>().ok())? {
                     Some(response) => Ok(response),
@@ -98,9 +117,78 @@ fn route_request(
                 None => Ok(text_response("404 Not Found", "run not found")),
             }
         }
-        ["api", "summary"] => json_response(&RunSummary::from_runs(state.runs())),
+        ("GET", ["api", "summary"]) => {
+            let state = store.load()?;
+            json_response(&RunSummary::from_runs(state.runs()))
+        }
         _ => Ok(text_response("404 Not Found", "not found")),
     }
+}
+
+fn replay_run_response(store: &CidStateStore, run_id: &str) -> CidResult<HttpResponse> {
+    let Some(run_id) = run_id.parse::<u64>().ok() else {
+        return Ok(text_response("404 Not Found", "run not found"));
+    };
+
+    let mut state = store.load()?;
+    let Some(source_run) = find_run(&state, Some(run_id)).cloned() else {
+        return Ok(text_response("404 Not Found", "run not found"));
+    };
+
+    let next_run = replay_run(&state, &source_run)?;
+    state.push_run(next_run.clone());
+    store.save(&state)?;
+
+    Ok(HttpResponse::new(
+        "201 Created",
+        "application/json; charset=utf-8",
+        serde_json::to_vec_pretty(&next_run).context("failed to serialize replayed run")?,
+    ))
+}
+
+fn replay_run(state: &DaemonState, source_run: &Run) -> CidResult<Run> {
+    let next_run_id = state.runs().iter().map(Run::id).max().unwrap_or(0) + 1;
+    let queued_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system clock is before unix epoch")?
+        .as_millis() as u64;
+
+    Ok(Run::new(
+        next_run_id,
+        source_run.repository_id(),
+        source_run.repository_name(),
+        source_run.branch(),
+        source_run.commit_sha(),
+        queued_at_ms,
+        source_run
+            .steps()
+            .iter()
+            .map(|step| {
+                cid_daemon::RunStep::new(
+                    step.name(),
+                    step.command(),
+                    step.image(),
+                    step.artifact_paths().to_vec(),
+                )
+            })
+            .collect(),
+    ))
+}
+
+fn request_method(request: &str) -> &str {
+    request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next())
+        .unwrap_or("GET")
+}
+
+fn request_path(request: &str) -> &str {
+    request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/")
 }
 
 fn json_response<T>(value: &T) -> CidResult<HttpResponse>
@@ -175,14 +263,6 @@ fn write_response(stream: &mut TcpStream, response: &HttpResponse) -> CidResult<
         .write_all(&response.body)
         .context("failed to write HTTP response body")?;
     Ok(())
-}
-
-fn request_path(request: &str) -> &str {
-    request
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("/")
 }
 
 fn api_path_segments(path: &str) -> Vec<&str> {
@@ -449,8 +529,8 @@ mod tests {
     use cid_daemon::{BranchRule, DaemonState, Pipeline, PipelineStep, Repository, Run};
 
     use super::{
-        CidStateStore, asset_response, content_type_for_path, request_path, resolve_asset_path,
-        route_request,
+        CidStateStore, asset_response, content_type_for_path, request_method, request_path,
+        resolve_asset_path, route_request,
     };
     use crate::asset_source::AssetSource;
 
@@ -463,10 +543,19 @@ mod tests {
     }
 
     #[test]
+    fn request_method_extracts_verb_from_request_line() {
+        assert_eq!(
+            request_method("POST /api/runs/3/replay HTTP/1.1\r\nHost: localhost\r\n"),
+            "POST"
+        );
+    }
+
+    #[test]
     fn route_request_returns_json_summary() {
         let pal = PalMock::new();
         let store = sample_store(&pal);
         let response = route_request(
+            "GET",
             "/api/summary",
             &store,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
@@ -523,6 +612,7 @@ mod tests {
         let pal = PalMock::new();
         let store = sample_store(&pal);
         let response = route_request(
+            "GET",
             "/api/repositories/1/branches",
             &store,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
@@ -546,6 +636,7 @@ mod tests {
         let pal = PalMock::new();
         let store = sample_store(&pal);
         let response = route_request(
+            "GET",
             "/api/repositories/1/branches/feature%2Fbeta",
             &store,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
@@ -563,6 +654,7 @@ mod tests {
         let pal = PalMock::new();
         let store = sample_store(&pal);
         let response = route_request(
+            "GET",
             "/api/runs/3/steps/0/log",
             &store,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
@@ -572,6 +664,36 @@ mod tests {
         assert_eq!(response.status, "200 OK");
         assert_eq!(response.content_type, "text/plain; charset=utf-8");
         assert_eq!(String::from_utf8(response.body).unwrap(), "latest main log");
+    }
+
+    #[test]
+    fn route_request_replays_a_run_as_new_queued_run() {
+        let pal = PalMock::new();
+        let store = sample_store(&pal);
+        let response = route_request(
+            "POST",
+            "/api/runs/3/replay",
+            &store,
+            &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
+        )
+        .unwrap();
+
+        let body = String::from_utf8(response.body).unwrap();
+        let state = store.load().unwrap();
+
+        assert_eq!(response.status, "201 Created");
+        assert!(body.contains("\"id\": 4"));
+        assert!(body.contains("\"status\": \"queued\""));
+        assert_eq!(state.runs().len(), 4);
+        let replayed_run = state.runs().iter().find(|run| run.id() == 4).unwrap();
+        assert_eq!(replayed_run.status(), cid_daemon::RunStatus::Queued);
+        assert_eq!(replayed_run.branch(), "main");
+        assert_eq!(replayed_run.commit_sha(), "fedcba");
+        assert_eq!(
+            replayed_run.steps()[0].status(),
+            cid_daemon::RunStatus::Queued
+        );
+        assert!(replayed_run.steps()[0].log_path().is_none());
     }
 
     fn sample_store(_pal: &PalMock) -> CidStateStore {

@@ -148,6 +148,10 @@ impl DaemonState {
     pub fn runs(&self) -> &[Run] {
         &self.runs
     }
+
+    pub fn push_run(&mut self, run: Run) {
+        self.runs.push(run);
+    }
 }
 
 fn sync_repositories(state: &mut DaemonState, repositories: Vec<Repository>) {

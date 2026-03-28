@@ -17,9 +17,10 @@ import { getRun, getRunStepLog } from "../../lib/api/client";
 import type { Run } from "../../lib/api/types";
 import { statusColor } from "../../lib/run-status";
 import { formatDuration, formatTimestamp, shortCommit } from "../../lib/time";
+import { ReplayRunButton } from "./replay-run-button";
 
 export function RunDetailPage() {
-  const { runId } = useParams({
+  const { repositoryId, runId } = useParams({
     from: "/repositories/$repositoryId/runs/$runId",
   });
   const [run, setRun] = useState<Run | null>(null);
@@ -161,7 +162,14 @@ export function RunDetailPage() {
                     {run.branch} · {shortCommit(run.commit_sha)}
                   </Typography.Paragraph>
                 </div>
-                <Tag color={statusColor(run.status)}>{run.status}</Tag>
+                <Flex align="center" gap={12}>
+                  <ReplayRunButton
+                    repositoryId={repositoryId}
+                    runId={runId}
+                    onError={setError}
+                  />
+                  <Tag color={statusColor(run.status)}>{run.status}</Tag>
+                </Flex>
               </div>
 
               <Descriptions bordered column={1}>

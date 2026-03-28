@@ -15,6 +15,7 @@ import { getRepositoryBranch } from "../../lib/api/client";
 import type { BranchDetail, Run } from "../../lib/api/types";
 import { statusColor } from "../../lib/run-status";
 import { formatTimestamp, shortCommit } from "../../lib/time";
+import { ReplayRunButton } from "../runs/replay-run-button";
 
 export function BranchPage() {
   const { repositoryId, branchName } = useParams({
@@ -163,6 +164,18 @@ export function BranchPage() {
                 dataIndex: "finished_at_ms",
                 key: "finished_at_ms",
                 render: (value: number | null) => formatTimestamp(value),
+              },
+              {
+                title: "Actions",
+                key: "actions",
+                render: (_, run) => (
+                  <ReplayRunButton
+                    repositoryId={run.repository_id}
+                    runId={run.id}
+                    size="small"
+                    onError={setError}
+                  />
+                ),
               },
             ]}
           />

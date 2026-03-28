@@ -74,5 +74,6 @@ describe("BranchPage", () => {
     expect(screen.getByText("Branch runs")).toBeInTheDocument();
     expect(screen.getByText("#7")).toBeInTheDocument();
     expect(screen.getAllByText("failed").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Try build again" })).toBeInTheDocument();
   });
 });

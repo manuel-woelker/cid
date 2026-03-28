@@ -17,6 +17,7 @@ import { getRepositories, getRuns, getSummary } from "../../lib/api/client";
 import type { Repository, Run, Summary } from "../../lib/api/types";
 import { statusColor } from "../../lib/run-status";
 import { formatTimestamp, shortCommit } from "../../lib/time";
+import { ReplayRunButton } from "../runs/replay-run-button";
 
 interface DashboardState {
   repositories: Repository[];
@@ -251,6 +252,18 @@ export function DashboardPage() {
                   key: "steps",
                   render: (_, run) =>
                     `${run.steps.length} step${run.steps.length === 1 ? "" : "s"}`,
+                },
+                {
+                  title: "Actions",
+                  key: "actions",
+                  render: (_, run) => (
+                    <ReplayRunButton
+                      repositoryId={run.repository_id}
+                      runId={run.id}
+                      size="small"
+                      onError={setError}
+                    />
+                  ),
                 },
               ]}
             />

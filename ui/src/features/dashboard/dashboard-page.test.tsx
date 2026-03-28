@@ -79,5 +79,6 @@ describe("DashboardPage", () => {
     expect(screen.getByText("/repos/cid")).toBeInTheDocument();
     expect(screen.getByText("#12 cid")).toBeInTheDocument();
     expect(screen.getByText("passed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try build again" })).toBeInTheDocument();
   });
 });
