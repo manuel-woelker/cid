@@ -1,11 +1,10 @@
 import { Layout, Space, Typography } from "antd";
 import { Link, Outlet, createRootRoute } from "@tanstack/react-router";
 
+import faviconUrl from "../assets/cid-favicon.png";
 import { AppProviders } from "./providers";
 
-const navItems = [
-  { to: "/", label: "Dashboard" },
-] as const;
+const navItems = [{ to: "/", label: "Dashboard" }] as const;
 
 function RootLayout() {
   return (
@@ -13,10 +12,13 @@ function RootLayout() {
       <Layout className="app-layout">
         <Layout.Header className="app-header">
           <div className="app-brand">
-            <Typography.Title level={3}>cid</Typography.Title>
-            <Typography.Text type="secondary">
-              Local-first CI with a dashboard that does not suck
-            </Typography.Text>
+            <img src={faviconUrl} alt="cid" className="app-logo" />
+            <div className="app-brand-copy">
+              <Typography.Title level={3}>cid</Typography.Title>
+              <Typography.Text type="secondary">
+                Local-first CI with a dashboard that does not suck
+              </Typography.Text>
+            </div>
           </div>
           <Space size="middle">
             {navItems.map((item) => (

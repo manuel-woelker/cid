@@ -1,7 +1,4 @@
-import {
-  createRoute,
-  createRouter,
-} from "@tanstack/react-router";
+import { createRoute, createRouter } from "@tanstack/react-router";
 
 import { DashboardPage } from "../features/dashboard/dashboard-page";
 import { RunDetailPage } from "../features/runs/run-detail-page";

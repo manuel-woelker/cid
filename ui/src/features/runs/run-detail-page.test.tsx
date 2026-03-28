@@ -44,7 +44,10 @@ describe("RunDetailPage", () => {
           ],
           events: [
             { timestamp_ms: 1_700_000_000_000, message: "run queued" },
-            { timestamp_ms: 1_700_000_001_250, message: "run finished with status failed" },
+            {
+              timestamp_ms: 1_700_000_001_250,
+              message: "run finished with status failed",
+            },
           ],
         }),
       ),

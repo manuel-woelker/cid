@@ -15,8 +15,7 @@ export function AppProviders({ children }: PropsWithChildren) {
           colorBgBase: "#f4efe6",
           colorTextBase: "#1f2937",
           borderRadius: 14,
-          fontFamily:
-            "\"IBM Plex Sans\", \"Avenir Next\", \"Segoe UI\", sans-serif",
+          fontFamily: '"IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif',
         },
       }}
     >

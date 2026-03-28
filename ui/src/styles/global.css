@@ -50,8 +50,25 @@ a {
   margin: 0;
 }
 
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.app-brand-copy {
+  min-width: 0;
+}
+
 .app-brand .ant-typography {
   display: block;
+}
+
+.app-logo {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .app-nav-link {
@@ -130,6 +147,10 @@ a {
   .app-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .app-brand {
+    align-items: flex-start;
   }
 
   .app-content {

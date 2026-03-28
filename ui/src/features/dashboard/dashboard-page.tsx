@@ -91,14 +91,17 @@ export function DashboardPage() {
   }, []);
 
   const recentRuns = useMemo(
-    () => [...state.runs].sort((left, right) => right.id - left.id).slice(0, 10),
+    () =>
+      [...state.runs].sort((left, right) => right.id - left.id).slice(0, 10),
     [state.runs],
   );
 
   return (
     <Space direction="vertical" size="large" className="page-stack">
       <section className="page-hero">
-        <Typography.Title>Local run visibility without the hosted-CI tax</Typography.Title>
+        <Typography.Title>
+          Local run visibility without the hosted-CI tax
+        </Typography.Title>
         <Typography.Paragraph>
           Track watched repositories, see what is running, and jump straight to
           the run that broke your branch.
@@ -117,12 +120,18 @@ export function DashboardPage() {
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} lg={8}>
           <Card className="stat-card" loading={isLoading}>
-            <Statistic title="Tracked repositories" value={state.repositories.length} />
+            <Statistic
+              title="Tracked repositories"
+              value={state.repositories.length}
+            />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={8}>
           <Card className="stat-card" loading={isLoading}>
-            <Statistic title="Recent runs" value={state.summary?.total_runs ?? 0} />
+            <Statistic
+              title="Recent runs"
+              value={state.summary?.total_runs ?? 0}
+            />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={8}>
@@ -143,7 +152,9 @@ export function DashboardPage() {
             extra={
               state.summary ? (
                 <Space size="small">
-                  <Tag color="processing">running {state.summary.running_runs}</Tag>
+                  <Tag color="processing">
+                    running {state.summary.running_runs}
+                  </Tag>
                   <Tag color="warning">queued {state.summary.queued_runs}</Tag>
                 </Space>
               ) : null
@@ -152,7 +163,11 @@ export function DashboardPage() {
             {state.repositories.length === 0 && !isLoading ? (
               <Empty description="No repositories are registered yet." />
             ) : (
-              <Space direction="vertical" size="middle" className="repository-list">
+              <Space
+                direction="vertical"
+                size="middle"
+                className="repository-list"
+              >
                 {state.repositories.map((repository) => (
                   <Card
                     key={repository.id}
@@ -169,7 +184,8 @@ export function DashboardPage() {
                       ))}
                     </Space>
                     <Typography.Paragraph className="muted-text compact-paragraph">
-                      Last seen: {formatTimestamp(repository.status.last_seen_at_ms)}
+                      Last seen:{" "}
+                      {formatTimestamp(repository.status.last_seen_at_ms)}
                     </Typography.Paragraph>
                     {repository.status.last_error ? (
                       <Alert
@@ -201,7 +217,10 @@ export function DashboardPage() {
                   key: "run",
                   render: (_, run) => (
                     <Space direction="vertical" size={0}>
-                      <Link to="/runs/$runId" params={{ runId: String(run.id) }}>
+                      <Link
+                        to="/runs/$runId"
+                        params={{ runId: String(run.id) }}
+                      >
                         #{run.id} {run.repository_name}
                       </Link>
                       <Typography.Text type="secondary">
@@ -227,7 +246,8 @@ export function DashboardPage() {
                 {
                   title: "Steps",
                   key: "steps",
-                  render: (_, run) => `${run.steps.length} step${run.steps.length === 1 ? "" : "s"}`,
+                  render: (_, run) =>
+                    `${run.steps.length} step${run.steps.length === 1 ? "" : "s"}`,
                 },
               ]}
             />

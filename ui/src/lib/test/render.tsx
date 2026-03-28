@@ -1,8 +1,5 @@
 import { render } from "@testing-library/react";
-import {
-  RouterProvider,
-  createMemoryHistory,
-} from "@tanstack/react-router";
+import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 
 import { router } from "../../app/router";
 
