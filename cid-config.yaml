@@ -1,0 +1,17 @@
+state_dir: .cid
+poll_interval_seconds: 30
+
+web:
+  enabled: true
+  address: 127.0.0.1:4000
+
+repositories:
+  - name: cid-rust-sandbox
+    path: sandboxes/cid-rust-sandbox
+    branches:
+      - main
+    pipeline:
+      image: rust:1.85
+      steps:
+        - name: test
+          command: cargo test
