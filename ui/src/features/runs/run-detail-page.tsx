@@ -14,22 +14,8 @@ import { useParams } from "@tanstack/react-router";
 
 import { getRun } from "../../lib/api/client";
 import type { Run } from "../../lib/api/types";
+import { statusColor } from "../../lib/run-status";
 import { formatDuration, formatTimestamp, shortCommit } from "../../lib/time";
-
-function statusColor(status: Run["status"]): string {
-  switch (status) {
-    case "passed":
-      return "success";
-    case "failed":
-      return "error";
-    case "running":
-      return "processing";
-    case "queued":
-      return "warning";
-    case "canceled":
-      return "default";
-  }
-}
 
 export function RunDetailPage() {
   const { runId } = useParams({ from: "/runs/$runId" });

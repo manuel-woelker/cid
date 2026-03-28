@@ -15,29 +15,13 @@ import { Link } from "@tanstack/react-router";
 
 import { getRepositories, getRuns, getSummary } from "../../lib/api/client";
 import type { Repository, Run, Summary } from "../../lib/api/types";
+import { statusColor } from "../../lib/run-status";
 import { formatTimestamp, shortCommit } from "../../lib/time";
 
 interface DashboardState {
   repositories: Repository[];
   runs: Run[];
   summary: Summary | null;
-}
-
-function statusColor(status: string): string {
-  switch (status) {
-    case "passed":
-      return "success";
-    case "failed":
-      return "error";
-    case "running":
-      return "processing";
-    case "queued":
-      return "warning";
-    case "canceled":
-      return "default";
-    default:
-      return "default";
-  }
 }
 
 export function DashboardPage() {
@@ -173,14 +157,30 @@ export function DashboardPage() {
                     key={repository.id}
                     size="small"
                     className="repository-card"
-                    title={repository.name}
+                    title={
+                      <Link
+                        to="/repositories/$repositoryId"
+                        params={{ repositoryId: String(repository.id) }}
+                      >
+                        {repository.name}
+                      </Link>
+                    }
                   >
                     <Typography.Paragraph className="muted-text">
                       {repository.path}
                     </Typography.Paragraph>
                     <Space wrap>
                       {repository.branch_rules.map((rule) => (
-                        <Tag key={rule.branch}>{rule.branch}</Tag>
+                        <Link
+                          key={rule.branch}
+                          to="/repositories/$repositoryId/branches/$branchName"
+                          params={{
+                            repositoryId: String(repository.id),
+                            branchName: rule.branch,
+                          }}
+                        >
+                          <Tag>{rule.branch}</Tag>
+                        </Link>
                       ))}
                     </Space>
                     <Typography.Paragraph className="muted-text compact-paragraph">

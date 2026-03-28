@@ -1,4 +1,10 @@
-import type { Repository, Run, Summary } from "./types";
+import type {
+  BranchDetail,
+  BranchSummary,
+  Repository,
+  Run,
+  Summary,
+} from "./types";
 
 async function requestJson<T>(path: string): Promise<T> {
   const response = await fetch(path, {
@@ -16,6 +22,27 @@ async function requestJson<T>(path: string): Promise<T> {
 
 export async function getRepositories(): Promise<Repository[]> {
   return requestJson<Repository[]>("/api/repositories");
+}
+
+export async function getRepository(repositoryId: string): Promise<Repository> {
+  return requestJson<Repository>(`/api/repositories/${repositoryId}`);
+}
+
+export async function getRepositoryBranches(
+  repositoryId: string,
+): Promise<BranchSummary[]> {
+  return requestJson<BranchSummary[]>(
+    `/api/repositories/${repositoryId}/branches`,
+  );
+}
+
+export async function getRepositoryBranch(
+  repositoryId: string,
+  branchName: string,
+): Promise<BranchDetail> {
+  return requestJson<BranchDetail>(
+    `/api/repositories/${repositoryId}/branches/${encodeURIComponent(branchName)}`,
+  );
 }
 
 export async function getRuns(): Promise<Run[]> {

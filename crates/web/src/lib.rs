@@ -7,7 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use asset_source::AssetSource;
 use cid_base::file_path::FilePath;
 use cid_base::result::{CidResult, ResultExt};
-use cid_daemon::{CidStateStore, DaemonState, Run, RunSummary};
+use cid_daemon::{CidStateStore, DaemonState, Repository, Run, RunStatus, RunSummary};
 use serde::Serialize;
 
 const UI_DIST_DIR: &str = "ui/dist";
@@ -49,15 +49,47 @@ fn route_request(
 ) -> CidResult<HttpResponse> {
     let state = store.load()?;
 
-    match path {
-        "/api/repositories" => json_response(state.repositories()),
-        "/api/runs" => json_response(state.runs()),
-        "/api/summary" => json_response(&RunSummary::from_runs(state.runs())),
-        path if path.starts_with("/api/runs/") => match find_run(&state, path) {
+    if !path.starts_with("/api/") {
+        return asset_response(path, asset_source);
+    }
+
+    match api_path_segments(path).as_slice() {
+        ["api", "repositories"] => json_response(state.repositories()),
+        ["api", "repositories", repository_id] => {
+            match find_repository(&state, repository_id.parse::<u64>().ok()) {
+                Some(repository) => json_response(repository),
+                None => Ok(text_response("404 Not Found", "repository not found")),
+            }
+        }
+        ["api", "repositories", repository_id, "branches"] => {
+            match find_repository(&state, repository_id.parse::<u64>().ok()) {
+                Some(repository) => json_response(&branch_summaries(&state, repository)),
+                None => Ok(text_response("404 Not Found", "repository not found")),
+            }
+        }
+        [
+            "api",
+            "repositories",
+            repository_id,
+            "branches",
+            branch_name,
+        ] => match find_repository(&state, repository_id.parse::<u64>().ok()) {
+            Some(repository) => {
+                let branch_name = decode_path_segment(branch_name)?;
+                match branch_detail(&state, repository, &branch_name) {
+                    Some(detail) => json_response(&detail),
+                    None => Ok(text_response("404 Not Found", "branch not found")),
+                }
+            }
+            None => Ok(text_response("404 Not Found", "repository not found")),
+        },
+        ["api", "runs"] => json_response(state.runs()),
+        ["api", "runs", run_id] => match find_run(&state, run_id.parse::<u64>().ok()) {
             Some(run) => json_response(run),
             None => Ok(text_response("404 Not Found", "run not found")),
         },
-        _ => asset_response(path, asset_source),
+        ["api", "summary"] => json_response(&RunSummary::from_runs(state.runs())),
+        _ => Ok(text_response("404 Not Found", "not found")),
     }
 }
 
@@ -139,11 +171,190 @@ fn request_path(request: &str) -> &str {
         .unwrap_or("/")
 }
 
-fn find_run<'a>(state: &'a DaemonState, path: &str) -> Option<&'a Run> {
-    path.trim_start_matches("/api/runs/")
-        .parse::<u64>()
-        .ok()
-        .and_then(|run_id| state.runs().iter().find(|run| run.id() == run_id))
+fn api_path_segments(path: &str) -> Vec<&str> {
+    path.split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect()
+}
+
+fn find_repository(state: &DaemonState, repository_id: Option<u64>) -> Option<&Repository> {
+    let repository_id = repository_id?;
+    state
+        .repositories()
+        .iter()
+        .find(|repository| repository.id() == repository_id)
+}
+
+fn find_run(state: &DaemonState, run_id: Option<u64>) -> Option<&Run> {
+    let run_id = run_id?;
+    state.runs().iter().find(|run| run.id() == run_id)
+}
+
+fn branch_summaries(state: &DaemonState, repository: &Repository) -> Vec<BranchSummary> {
+    let mut branches: Vec<_> = repository
+        .branch_rules()
+        .iter()
+        .map(|rule| {
+            let latest_run = latest_run_for_branch(state, repository.id(), rule.branch());
+            BranchSummary {
+                branch_name: rule.branch().to_string(),
+                latest_run: latest_run.map(BranchLatestRun::from_run),
+                run_count: runs_for_branch(state, repository.id(), rule.branch()).len(),
+            }
+        })
+        .collect();
+
+    branches.sort_by(|left, right| {
+        branch_sort_timestamp(right)
+            .cmp(&branch_sort_timestamp(left))
+            .then_with(|| left.branch_name.cmp(&right.branch_name))
+    });
+
+    branches
+}
+
+fn branch_detail(
+    state: &DaemonState,
+    repository: &Repository,
+    branch_name: &str,
+) -> Option<RepositoryBranchDetail> {
+    if !repository
+        .branch_rules()
+        .iter()
+        .any(|rule| rule.branch() == branch_name)
+    {
+        return None;
+    }
+
+    let runs = runs_for_branch(state, repository.id(), branch_name)
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let latest_run = runs.first().map(BranchLatestRun::from_run);
+
+    Some(RepositoryBranchDetail {
+        repository: repository.clone(),
+        branch: BranchSummary {
+            branch_name: branch_name.to_string(),
+            latest_run,
+            run_count: runs.len(),
+        },
+        runs,
+    })
+}
+
+fn latest_run_for_branch<'a>(
+    state: &'a DaemonState,
+    repository_id: u64,
+    branch_name: &str,
+) -> Option<&'a Run> {
+    runs_for_branch(state, repository_id, branch_name)
+        .into_iter()
+        .next()
+}
+
+fn runs_for_branch<'a>(
+    state: &'a DaemonState,
+    repository_id: u64,
+    branch_name: &str,
+) -> Vec<&'a Run> {
+    let mut runs = state
+        .runs()
+        .iter()
+        .filter(|run| run.repository_id() == repository_id && run.branch() == branch_name)
+        .collect::<Vec<_>>();
+    runs.sort_by(|left, right| {
+        run_activity_timestamp(right)
+            .cmp(&run_activity_timestamp(left))
+            .then_with(|| right.id().cmp(&left.id()))
+    });
+    runs
+}
+
+fn run_activity_timestamp(run: &Run) -> u64 {
+    run.finished_at_ms()
+        .or(run.started_at_ms())
+        .unwrap_or(run.queued_at_ms())
+}
+
+fn branch_sort_timestamp(branch: &BranchSummary) -> Option<u64> {
+    branch
+        .latest_run
+        .as_ref()
+        .map(|run| run.activity_timestamp_ms)
+}
+
+fn decode_path_segment(segment: &str) -> CidResult<String> {
+    let mut bytes = Vec::with_capacity(segment.len());
+    let input = segment.as_bytes();
+    let mut index = 0;
+
+    while index < input.len() {
+        if input[index] == b'%' {
+            if index + 2 >= input.len() {
+                return Err(cid_base::err!("invalid percent-encoded path segment"));
+            }
+
+            let high = decode_hex_nibble(input[index + 1])?;
+            let low = decode_hex_nibble(input[index + 2])?;
+            bytes.push((high << 4) | low);
+            index += 3;
+            continue;
+        }
+
+        bytes.push(input[index]);
+        index += 1;
+    }
+
+    String::from_utf8(bytes).context("invalid utf-8 in path segment")
+}
+
+fn decode_hex_nibble(byte: u8) -> CidResult<u8> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(cid_base::err!("invalid percent-encoded path segment")),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BranchLatestRun {
+    run_id: u64,
+    status: RunStatus,
+    commit_sha: String,
+    queued_at_ms: u64,
+    started_at_ms: Option<u64>,
+    finished_at_ms: Option<u64>,
+    activity_timestamp_ms: u64,
+}
+
+impl BranchLatestRun {
+    fn from_run(run: &Run) -> Self {
+        Self {
+            run_id: run.id(),
+            status: run.status(),
+            commit_sha: run.commit_sha().to_string(),
+            queued_at_ms: run.queued_at_ms(),
+            started_at_ms: run.started_at_ms(),
+            finished_at_ms: run.finished_at_ms(),
+            activity_timestamp_ms: run_activity_timestamp(run),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BranchSummary {
+    branch_name: String,
+    latest_run: Option<BranchLatestRun>,
+    run_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RepositoryBranchDetail {
+    repository: Repository,
+    branch: BranchSummary,
+    runs: Vec<Run>,
 }
 
 fn resolve_asset_path(path: &str) -> Option<FilePath> {
@@ -203,7 +414,7 @@ mod tests {
     use cid_pal::pal::PalHandle;
     use cid_pal::pal_mock::PalMock;
 
-    use cid_daemon::{BranchRule, DaemonState, Pipeline, PipelineStep, Repository, Run, RunStep};
+    use cid_daemon::{BranchRule, DaemonState, Pipeline, PipelineStep, Repository, Run};
 
     use super::{
         CidStateStore, asset_response, content_type_for_path, request_path, resolve_asset_path,
@@ -235,7 +446,7 @@ mod tests {
         assert!(
             String::from_utf8(response.body)
                 .unwrap()
-                .contains("\"total_runs\": 1")
+                .contains("\"total_runs\": 3")
         );
     }
 
@@ -275,13 +486,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn route_request_returns_repository_branch_summaries_in_latest_build_order() {
+        let pal = PalMock::new();
+        let store = sample_store(&pal);
+        let response = route_request(
+            "/api/repositories/1/branches",
+            &store,
+            &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
+        )
+        .unwrap();
+
+        let body = String::from_utf8(response.body).unwrap();
+        let main_index = body.find("\"branch_name\": \"main\"").unwrap();
+        let release_index = body.find("\"branch_name\": \"release\"").unwrap();
+        let beta_index = body.find("\"branch_name\": \"feature/beta\"").unwrap();
+
+        assert_eq!(response.status, "200 OK");
+        assert!(main_index < release_index);
+        assert!(release_index < beta_index);
+        assert!(body.contains("\"status\": \"passed\""));
+        assert!(body.contains("\"status\": \"failed\""));
+    }
+
+    #[test]
+    fn route_request_returns_branch_detail_for_url_encoded_branch_name() {
+        let pal = PalMock::new();
+        let store = sample_store(&pal);
+        let response = route_request(
+            "/api/repositories/1/branches/feature%2Fbeta",
+            &store,
+            &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
+        )
+        .unwrap();
+
+        let body = String::from_utf8(response.body).unwrap();
+        assert_eq!(response.status, "200 OK");
+        assert!(body.contains("\"branch_name\": \"feature/beta\""));
+        assert!(body.contains("\"run_count\": 0"));
+    }
+
     fn sample_store(_pal: &PalMock) -> CidStateStore {
         let store = CidStateStore::new(FilePath::new(temp_state_dir("web-store")));
         let repository = Repository::new(
             1,
             "cid",
             FilePath::new("/repos/cid"),
-            vec![BranchRule::new("main")],
+            vec![
+                BranchRule::new("main"),
+                BranchRule::new("release"),
+                BranchRule::new("feature/beta"),
+            ],
             Pipeline::new(
                 "rust:1.85",
                 vec![PipelineStep::new("test", "cargo test")],
@@ -289,19 +544,56 @@ mod tests {
             ),
         );
 
-        let run = Run::new(
-            1,
-            1,
-            "cid",
-            "main",
-            "abc123",
-            100,
-            vec![RunStep::new("test", "cargo test", "rust:1.85", Vec::new())],
+        let run = sample_run(1, "main", "abc123", "queued", 100, None, None);
+        let newer_run = sample_run(2, "release", "def456", "failed", 90, Some(110), Some(120));
+        let latest_run = sample_run(3, "main", "fedcba", "passed", 130, Some(140), Some(150));
+
+        let state = DaemonState::new(
+            vec![repository],
+            Vec::new(),
+            vec![run, newer_run, latest_run],
         );
-        let state = DaemonState::new(vec![repository], Vec::new(), vec![run]);
         store.save(&state).unwrap();
 
         store
+    }
+
+    fn sample_run(
+        id: u64,
+        branch: &str,
+        commit_sha: &str,
+        status: &str,
+        queued_at_ms: u64,
+        started_at_ms: Option<u64>,
+        finished_at_ms: Option<u64>,
+    ) -> Run {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "repository_id": 1,
+            "repository_name": "cid",
+            "branch": branch,
+            "commit_sha": commit_sha,
+            "status": status,
+            "queued_at_ms": queued_at_ms,
+            "started_at_ms": started_at_ms,
+            "finished_at_ms": finished_at_ms,
+            "steps": [
+                {
+                    "name": "test",
+                    "command": "cargo test",
+                    "image": "rust:1.85",
+                    "status": status,
+                    "exit_code": null,
+                    "started_at_ms": started_at_ms,
+                    "finished_at_ms": finished_at_ms,
+                    "duration_ms": finished_at_ms.zip(started_at_ms).map(|(finished, started)| finished - started),
+                    "log_path": null,
+                    "artifact_paths": [],
+                }
+            ],
+            "events": [],
+        }))
+        .unwrap()
     }
 
     fn temp_state_dir(prefix: &str) -> String {

@@ -1,6 +1,8 @@
 import { createRoute, createRouter } from "@tanstack/react-router";
 
 import { DashboardPage } from "../features/dashboard/dashboard-page";
+import { BranchPage } from "../features/repositories/branch-page";
+import { RepositoryPage } from "../features/repositories/repository-page";
 import { RunDetailPage } from "../features/runs/run-detail-page";
 import { rootRoute } from "./root-layout";
 
@@ -16,14 +18,35 @@ const runDetailRoute = createRoute({
   component: RunDetailPage,
 });
 
-const routeTree = rootRoute.addChildren([dashboardRoute, runDetailRoute]);
-
-export const router = createRouter({
-  routeTree,
+const repositoryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/repositories/$repositoryId",
+  component: RepositoryPage,
 });
+
+const branchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/repositories/$repositoryId/branches/$branchName",
+  component: BranchPage,
+});
+
+export const routeTree = rootRoute.addChildren([
+  dashboardRoute,
+  runDetailRoute,
+  repositoryRoute,
+  branchRoute,
+]);
+
+export function createAppRouter() {
+  return createRouter({
+    routeTree,
+  });
+}
+
+export const router = createAppRouter();
 
 declare module "@tanstack/react-router" {
   interface Register {
-    router: typeof router;
+    router: ReturnType<typeof createAppRouter>;
   }
 }

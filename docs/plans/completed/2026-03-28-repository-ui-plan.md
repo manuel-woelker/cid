@@ -3,6 +3,19 @@
 This plan defines how to add repository-focused UI screens to `./ui`.
 The goal is to let users open a repository page, see branches ordered by most recent build activity with clear build status, drill into one branch, and deep-link to those screens through TanStack Router.
 
+# What is the current status?
+
+This plan is complete and the repository now includes:
+
+- repository detail routes in the frontend
+- branch detail routes in the frontend
+- repository and branch JSON endpoints in `crates/web`
+- dashboard links into repository and branch deep links
+- frontend and backend tests for the new repository UI flows
+
+The remaining caveat is scope, not correctness.
+These screens cover repository and branch health cleanly, but they still use straightforward tables and request-response fetching rather than richer branch analytics or live updates.
+
 # What problem is this plan solving?
 
 The current UI gives a dashboard and individual run detail pages, but it is still missing a useful middle layer between "all repositories" and "one run."
@@ -180,23 +193,23 @@ This order keeps the routing and UI grounded in a real backend contract instead 
 
 # How should this work be tracked?
 
-- [ ] Add JSON API response types for repository detail and branch summary payloads
-- [ ] Add `GET /api/repositories/:id`
-- [ ] Add `GET /api/repositories/:id/branches`
-- [ ] Add `GET /api/repositories/:id/branches/:branch`
-- [ ] Make branch summary ordering reflect most recent build activity
-- [ ] Include configured branches with no runs in the repository branch list
-- [ ] Add frontend API client helpers for repository and branch routes
-- [ ] Add TanStack Router routes for `/repositories/$repositoryId`
-- [ ] Add TanStack Router routes for `/repositories/$repositoryId/branches/$branchName`
-- [ ] Implement the repository page UI with branch status and last-build ordering
-- [ ] Implement the branch page UI with branch-specific run history
-- [ ] Update dashboard links to point at repository and branch deep links
-- [ ] Add colocated frontend tests for repository page rendering and branch page deep links
-- [ ] Add backend tests for repository and branch JSON responses
-- [ ] Run `pnpm --dir ui test:run`
-- [ ] Run `pnpm --dir ui build`
-- [ ] Run `./scripts/check-code.sh`
+- [x] Add JSON API response types for repository detail and branch summary payloads
+- [x] Add `GET /api/repositories/:id`
+- [x] Add `GET /api/repositories/:id/branches`
+- [x] Add `GET /api/repositories/:id/branches/:branch`
+- [x] Make branch summary ordering reflect most recent build activity
+- [x] Include configured branches with no runs in the repository branch list
+- [x] Add frontend API client helpers for repository and branch routes
+- [x] Add TanStack Router routes for `/repositories/$repositoryId`
+- [x] Add TanStack Router routes for `/repositories/$repositoryId/branches/$branchName`
+- [x] Implement the repository page UI with branch status and last-build ordering
+- [x] Implement the branch page UI with branch-specific run history
+- [x] Update dashboard links to point at repository and branch deep links
+- [x] Add colocated frontend tests for repository page rendering and branch page deep links
+- [x] Add backend tests for repository and branch JSON responses
+- [x] Run `pnpm --dir ui test:run`
+- [x] Run `pnpm --dir ui build`
+- [x] Run `./scripts/check-code.sh`
 
 # How should the work be verified?
 
@@ -215,3 +228,12 @@ Manual smoke checking is also worth doing once the feature lands:
 - confirm branches are ordered by latest build activity
 - open a branch page from that repository page
 - confirm branch runs match the expected status history
+
+What landed was verified with:
+
+- backend tests in [`lib.rs`](/data/projects/cid/crates/web/src/lib.rs)
+- frontend tests in [`repository-page.test.tsx`](/data/projects/cid/ui/src/features/repositories/repository-page.test.tsx)
+- frontend tests in [`branch-page.test.tsx`](/data/projects/cid/ui/src/features/repositories/branch-page.test.tsx)
+- `pnpm --dir ui test:run`
+- `pnpm --dir ui build`
+- `./scripts/check-code.sh`

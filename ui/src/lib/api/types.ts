@@ -61,6 +61,28 @@ export interface Run {
   events: RunEvent[];
 }
 
+export interface BranchLatestRun {
+  run_id: number;
+  status: RunStatus;
+  commit_sha: string;
+  queued_at_ms: number;
+  started_at_ms: number | null;
+  finished_at_ms: number | null;
+  activity_timestamp_ms: number;
+}
+
+export interface BranchSummary {
+  branch_name: string;
+  latest_run: BranchLatestRun | null;
+  run_count: number;
+}
+
+export interface BranchDetail {
+  repository: Repository;
+  branch: BranchSummary;
+  runs: Run[];
+}
+
 export interface Summary {
   total_runs: number;
   queued_runs: number;
