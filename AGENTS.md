@@ -35,7 +35,7 @@ Default expectations:
 - tests should be colocated with the code they verify
 - prefer black-box behavior tests over mocking
 - add regression coverage for bug fixes
-- run `./scripts/check-code.sh` before considering a unit of work done
+- run `nao check` before considering a unit of work done
 
 ## Commit Messages
 

@@ -224,6 +224,10 @@ The README is intended to describe the product clearly before implementation sta
 - why it exists
 - what the first version should optimize for
 
+## Development
+
+Use `nao check` to run the repository verification suite before considering a change done.
+
 ## Name
 
 `cid` stands for continuous integration daemon.
