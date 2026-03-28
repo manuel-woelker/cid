@@ -3,6 +3,18 @@
 This plan defines how to implement the persistence model documented in [PERSISTENCE.md](/data/projects/cid/docs/PERSISTENCE.md).
 The goal is to replace the current YAML-based daemon state with the documented SQLite-plus-filesystem layout without smuggling legacy compatibility work into unrelated runtime changes.
 
+# What is the current status?
+
+This plan is complete and the repository now includes:
+
+- a central registry database at `.cid/cid.db`
+- repository-local databases at `.cid/repositories/<repository-key>/cid-repo.db`
+- repository-local `workspace/`, `cache/`, and `runs/` directories
+- repository-local run log writes under `runs/run-<id>/`
+- colocated persistence tests covering round-trips, repository keys, and log-path generation
+
+One small cleanup item remains outside this completed plan: some helper naming still uses `state_file_path`, even though live YAML persistence is no longer the implementation.
+
 # What problem is this plan solving?
 
 The repository now documents a persistence model with:
@@ -12,8 +24,8 @@ The repository now documents a persistence model with:
 - one repository-local SQLite database at `.cid/repositories/<repository-key>/cid-repo.db`
 - repository-local `workspace/`, `cache/`, and `runs/` directories
 
-The implementation does not match that model yet.
-Today, [`crates/daemon/src/persistence.rs`](/data/projects/cid/crates/daemon/src/persistence.rs) still persists daemon state into `state.yaml` and writes logs into a flat `logs/` directory under the state root.
+The implementation used to lag behind that model.
+Historically, [`crates/daemon/src/persistence.rs`](/data/projects/cid/crates/daemon/src/persistence.rs) persisted daemon state into `state.yaml` and wrote logs into a flat `logs/` directory under the state root.
 
 That gap is now big enough to be annoying:
 
@@ -203,19 +215,19 @@ Those are boring risks, which is good, but they still need explicit coverage.
 
 # How should this work be tracked?
 
-- [ ] Add the SQLite crate(s) needed for persistence
-- [ ] Add central registry schema creation for `.cid/cid.db`
-- [ ] Add repository directory layout creation under `.cid/repositories/`
-- [ ] Add repository-local schema creation for `repo_state`, `tracked_refs`, and `runs`
-- [ ] Add a stable repository-key generation strategy
-- [ ] Add a central registry store API for repository rows
-- [ ] Add a repository-local store API for repo state, tracked refs, and runs
-- [ ] Move step-log writes into repository-local `runs/` directories
-- [ ] Switch daemon load/save behavior to the new persistence stores
-- [ ] Remove legacy YAML persistence code
-- [ ] Add colocated tests for schema creation, repository layout creation, and persistence round-trips
-- [ ] Add regression coverage for repository-local log-path generation
-- [ ] Run `./scripts/check-code.sh`
+- [x] Add the SQLite crate(s) needed for persistence
+- [x] Add central registry schema creation for `.cid/cid.db`
+- [x] Add repository directory layout creation under `.cid/repositories/`
+- [x] Add repository-local schema creation for `repo_state`, `tracked_refs`, and `runs`
+- [x] Add a stable repository-key generation strategy
+- [x] Add a central registry store API for repository rows
+- [x] Add a repository-local store API for repo state, tracked refs, and runs
+- [x] Move step-log writes into repository-local `runs/` directories
+- [x] Switch daemon load/save behavior to the new persistence stores
+- [x] Remove legacy YAML persistence code
+- [x] Add colocated tests for schema creation, repository layout creation, and persistence round-trips
+- [x] Add regression coverage for repository-local log-path generation
+- [x] Run `./scripts/check-code.sh`
 
 # How should the work be verified?
 
@@ -233,3 +245,8 @@ Manual smoke checking is also worth doing once the implementation lands:
 - start the daemon with an empty `.cid` directory
 - confirm repository directories and databases are created in the documented locations
 - confirm new run logs land under the repository-local `runs/` directory
+
+What landed was verified with:
+
+- the colocated persistence tests in [`persistence.rs`](/data/projects/cid/crates/daemon/src/persistence.rs)
+- `./scripts/check-code.sh`
