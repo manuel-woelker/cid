@@ -53,7 +53,7 @@ describe("RunDetailPage", () => {
       ),
     );
 
-    await renderApp("/runs/7");
+    await renderApp("/repositories/1/runs/7");
 
     await waitFor(() =>
       expect(screen.getByText("Run #7 · cid")).toBeInTheDocument(),

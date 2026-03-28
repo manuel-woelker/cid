@@ -218,8 +218,11 @@ export function DashboardPage() {
                   render: (_, run) => (
                     <Space direction="vertical" size={0}>
                       <Link
-                        to="/runs/$runId"
-                        params={{ runId: String(run.id) }}
+                        to="/repositories/$repositoryId/runs/$runId"
+                        params={{
+                          repositoryId: String(run.repository_id),
+                          runId: String(run.id),
+                        }}
                       >
                         #{run.id} {run.repository_name}
                       </Link>

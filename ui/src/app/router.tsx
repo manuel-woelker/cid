@@ -14,7 +14,7 @@ const dashboardRoute = createRoute({
 
 const runDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/runs/$runId",
+  path: "/repositories/$repositoryId/runs/$runId",
   component: RunDetailPage,
 });
 

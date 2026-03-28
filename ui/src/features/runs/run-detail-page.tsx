@@ -18,7 +18,9 @@ import { statusColor } from "../../lib/run-status";
 import { formatDuration, formatTimestamp, shortCommit } from "../../lib/time";
 
 export function RunDetailPage() {
-  const { runId } = useParams({ from: "/runs/$runId" });
+  const { runId } = useParams({
+    from: "/repositories/$repositoryId/runs/$runId",
+  });
   const [run, setRun] = useState<Run | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

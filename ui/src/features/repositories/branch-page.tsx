@@ -128,7 +128,13 @@ export function BranchPage() {
                 title: "Run",
                 key: "run",
                 render: (_, run) => (
-                  <Link to="/runs/$runId" params={{ runId: String(run.id) }}>
+                  <Link
+                    to="/repositories/$repositoryId/runs/$runId"
+                    params={{
+                      repositoryId: String(run.repository_id),
+                      runId: String(run.id),
+                    }}
+                  >
                     #{run.id}
                   </Link>
                 ),
