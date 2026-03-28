@@ -8,10 +8,3 @@ web:
 repositories:
   - name: cid-rust-sandbox
     path: sandboxes/cid-rust-sandbox
-    branches:
-      - main
-    pipeline:
-      image: rust:1.85
-      steps:
-        - name: test
-          command: cargo test

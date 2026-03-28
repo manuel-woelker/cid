@@ -39,7 +39,7 @@ impl CidDaemon {
     pub fn from_config(config: &CidConfig, pal: PalHandle) -> CidResult<Self> {
         let store = CidStateStore::new(config.state_dir().clone());
         let mut state = store.load()?;
-        let repositories = config.repositories()?;
+        let repositories = config.repositories(&*pal)?;
         sync_repositories(&mut state, repositories);
         store.save(&state)?;
 

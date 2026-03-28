@@ -30,10 +30,6 @@ pub struct WebConfig {
 struct RepositoryConfig {
     name: Option<String>,
     path: FilePath,
-    #[serde(default = "default_branches")]
-    branches: Vec<String>,
-    #[serde(default)]
-    pipeline: PipelineConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +46,14 @@ struct PipelineConfig {
 struct PipelineStepConfig {
     name: String,
     command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct UpstreamRepositoryConfig {
+    #[serde(default = "default_branches")]
+    branches: Vec<String>,
+    #[serde(default)]
+    pipeline: PipelineConfig,
 }
 
 impl CidConfig {
@@ -80,11 +84,11 @@ impl CidConfig {
         Duration::from_secs(self.poll_interval_seconds)
     }
 
-    pub fn repositories(&self) -> CidResult<Vec<Repository>> {
+    pub fn repositories(&self, pal: &dyn Pal) -> CidResult<Vec<Repository>> {
         self.repositories
             .iter()
             .enumerate()
-            .map(|(index, repository)| repository.to_repository(index as u64 + 1))
+            .map(|(index, repository)| repository.to_repository(pal, index as u64 + 1))
             .collect()
     }
 
@@ -149,38 +153,34 @@ impl RepositoryConfig {
             ));
         }
 
-        if self.branches.is_empty() {
-            return Err(cid_base::err!(
-                "repository configuration must include at least one branch: {}",
-                self.path
-            ));
-        }
-
-        if self.pipeline.steps.is_empty() {
-            return Err(cid_base::err!(
-                "repository configuration must include at least one pipeline step: {}",
-                self.path
-            ));
-        }
+        let upstream = self.load_upstream_config(pal)?;
+        upstream.validate(&self.path)?;
 
         Ok(())
     }
 
-    fn to_repository(&self, id: u64) -> CidResult<Repository> {
+    fn to_repository(&self, pal: &dyn Pal, id: u64) -> CidResult<Repository> {
         let name = self
             .name
             .clone()
             .unwrap_or_else(|| self.path.file_name().unwrap_or("repository").to_string());
 
-        let branch_rules = self.branches.iter().cloned().map(BranchRule::new).collect();
+        let upstream = self.load_upstream_config(pal)?;
+        let branch_rules = upstream
+            .branches
+            .iter()
+            .cloned()
+            .map(BranchRule::new)
+            .collect();
         let pipeline = Pipeline::new(
-            self.pipeline.image.clone(),
-            self.pipeline
+            upstream.pipeline.image,
+            upstream
+                .pipeline
                 .steps
                 .iter()
                 .map(|step| PipelineStep::new(step.name.clone(), step.command.clone()))
                 .collect(),
-            self.pipeline.artifact_paths.clone(),
+            upstream.pipeline.artifact_paths,
         );
 
         Ok(Repository::new(
@@ -190,6 +190,39 @@ impl RepositoryConfig {
             branch_rules,
             pipeline,
         ))
+    }
+
+    fn load_upstream_config(&self, pal: &dyn Pal) -> CidResult<UpstreamRepositoryConfig> {
+        let path = self.upstream_config_path();
+        let contents = pal
+            .read_file_to_string(&path)
+            .with_context(|| format!("failed to read repository config file `{path}`"))?;
+        serde_yaml::from_str(&contents)
+            .with_context(|| format!("failed to parse repository config file `{path}`"))
+    }
+
+    fn upstream_config_path(&self) -> FilePath {
+        self.path.join(".cid").join("cid.yaml")
+    }
+}
+
+impl UpstreamRepositoryConfig {
+    fn validate(&self, repository_path: &FilePath) -> CidResult<()> {
+        if self.branches.is_empty() {
+            return Err(cid_base::err!(
+                "repository config must include at least one branch: {}",
+                repository_path
+            ));
+        }
+
+        if self.pipeline.steps.is_empty() {
+            return Err(cid_base::err!(
+                "repository config must include at least one pipeline step: {}",
+                repository_path
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -238,11 +271,15 @@ mod tests {
         pal.set_directory("repos/foo/.git");
         pal.set_file(
             "cid-config.yaml",
-            "state_dir: state\npoll_interval_seconds: 5\nrepositories:\n  - path: repos/foo\n    branches: [main]\n    pipeline:\n      image: rust:1.85\n      steps:\n        - name: test\n          command: cargo test\n",
+            "state_dir: state\npoll_interval_seconds: 5\nrepositories:\n  - path: repos/foo\n",
+        );
+        pal.set_file(
+            "repos/foo/.cid/cid.yaml",
+            "branches: [main]\npipeline:\n  image: rust:1.85\n  steps:\n    - name: test\n      command: cargo test\n",
         );
 
         let config = CidConfig::load_from_path(&FilePath::new("cid-config.yaml"), &pal).unwrap();
-        let repositories = config.repositories().unwrap();
+        let repositories = config.repositories(&pal).unwrap();
 
         assert_eq!(config.poll_interval().as_secs(), 5);
         assert_eq!(repositories.len(), 1);
@@ -263,5 +300,23 @@ mod tests {
                 .to_test_string()
                 .contains("configured repository path is not a git repository")
         );
+    }
+
+    #[test]
+    fn load_from_path_reads_repository_config_from_upstream_repo() {
+        let pal = PalMock::new();
+        pal.set_directory("repos/foo");
+        pal.set_directory("repos/foo/.git");
+        pal.set_file("cid-config.yaml", "repositories:\n  - path: repos/foo\n");
+        pal.set_file(
+            "repos/foo/.cid/cid.yaml",
+            "branches: [main]\npipeline:\n  image: rust:1.85\n  steps:\n    - name: test\n      command: cargo test\n",
+        );
+
+        let config = CidConfig::load_from_path(&FilePath::new("cid-config.yaml"), &pal).unwrap();
+        let repositories = config.repositories(&pal).unwrap();
+
+        assert_eq!(repositories[0].branch_rules()[0].branch(), "main");
+        assert_eq!(repositories[0].pipeline().image(), "rust:1.85");
     }
 }
