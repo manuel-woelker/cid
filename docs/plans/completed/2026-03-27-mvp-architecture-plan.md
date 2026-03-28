@@ -3,6 +3,22 @@
 This plan defines the first concrete implementation path for `cid` after the high-level architecture document.
 The goal is to turn the broad system outline into a small set of crates, runtime responsibilities, and implementation steps that support a useful first version.
 
+# What is the current status?
+
+This plan is complete.
+
+The core runtime shape is in place:
+
+- `crates/base`, `crates/server`, `crates/daemon`, and `crates/web` exist
+- the daemon watches repositories, schedules discovered commits, runs sequential Docker steps, persists run state, and exposes a minimal web API
+- the server binary is now a thin process entrypoint, with the long-running daemon loop moved into `crates/daemon`
+- the web UI exists and is backed by the runtime state
+
+Two deliberate deviations remain:
+
+- the server entrypoint does not yet implement repository registration or status-inspection commands beyond starting the daemon
+- structured state is persisted as YAML plus filesystem logs rather than in an embedded database
+
 # What problem is this plan solving?
 
 `cid` now has product direction and a broad architecture description, but it does not yet have an implementation plan that answers practical questions such as:
@@ -98,28 +114,26 @@ The model should be designed for boring persistence and API serialization, not c
 
 # What storage approach should the MVP use?
 
-The recommended first storage shape is:
+The implemented MVP storage shape is:
 
-- an embedded database for structured state
+- YAML-backed structured state under the daemon state directory
 - filesystem-backed logs and retained artifacts
 
-The database should hold:
+The structured state file currently holds:
 
 - repositories
-- branch rules
 - discovered commits
 - runs
 - run steps
-- lightweight aggregate statistics
+- lightweight summary-friendly data derived from stored runs
 
-The filesystem should hold:
+The filesystem holds:
 
 - per-step logs
 - retained artifacts
-- optionally exported run summaries
 
-This split is practical.
-Trying to force logs into SQL from day one is unnecessary pain.
+This is a deliberate simplification from the original embedded-database idea.
+It keeps the first version boring and inspectable, but it should be revisited if state growth or query complexity starts to hurt.
 
 # What execution flow should the MVP implement?
 
@@ -200,6 +214,13 @@ This plan assumes:
 
 If any of those assumptions become false, the plan should be updated rather than silently stretched.
 
+# What follow-up work is still outside this completed plan?
+
+The most obvious follow-up work beyond this plan is:
+
+- add server commands for repository registration and status inspection if the product still wants them at the process entrypoint
+- revisit the persistence format if YAML state becomes awkward for upgrades, querying, or larger run histories
+
 # What are the main risks?
 
 The main risks are:
@@ -214,19 +235,24 @@ These are the places where disciplined boundaries will matter most.
 
 # How should this work be tracked?
 
-- [ ] Add `crates/daemon` with the initial core domain model
-- [ ] Move daemon-facing state types out of the CLI crate
-- [ ] Define repository registration and pipeline configuration types
-- [ ] Define run, run-step, run-event, and run-status types
-- [ ] Add a persistence layer for repositories and runs
-- [ ] Implement a first repository watcher for tracked branches
-- [ ] Implement a scheduler that turns discovered commits into queued runs
-- [ ] Implement a sequential Docker runner for queued runs
-- [ ] Persist step logs and run summaries during execution
-- [ ] Add a minimal `crates/web` server with repository and run endpoints
-- [ ] Add a minimal dashboard backed by those endpoints
-- [ ] Add colocated tests for scheduling, persistence, and runner behavior
-- [ ] Run `./scripts/check-code.sh`
+- [x] Add `crates/daemon` with the initial core domain model
+- [x] Move daemon-facing state types out of the CLI crate
+- [x] Define repository registration and pipeline configuration types
+- [x] Define run, run-step, run-event, and run-status types
+- [x] Add a persistence layer for repositories and runs
+- [x] Implement a first repository watcher for tracked branches
+- [x] Implement a scheduler that turns discovered commits into queued runs
+- [x] Implement a sequential Docker runner for queued runs
+- [x] Persist step logs and run summaries during execution
+- [x] Add a minimal `crates/web` server with repository and run endpoints
+- [x] Add a minimal dashboard backed by those endpoints
+- [x] Add colocated tests for scheduling, persistence, and runner behavior
+- [x] Run `./scripts/check-code.sh`
+- [x] Do not add server commands for repository registration and status inspection beyond daemon startup in this MVP plan
+- [x] Do not replace YAML-backed structured state with an embedded database in this MVP plan
+
+These two items are intentionally closed as won't-fix for this plan.
+They remain valid future product questions, but they are not required for the completed MVP architecture slice captured here.
 
 # How should the work be verified?
 

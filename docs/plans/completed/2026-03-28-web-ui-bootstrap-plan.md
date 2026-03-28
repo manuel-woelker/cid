@@ -3,6 +3,23 @@
 This plan defines how to create a new web UI in `./ui` using `React`, `pnpm`, `Vite`, `Vitest`, and `Ant Design`.
 The goal is to replace the current inline HTML dashboard with a frontend that is fast to iterate on, pleasant to extend, and easy for the Rust web layer to serve in production.
 
+# What is the current status?
+
+This plan is complete and the document now reflects what landed.
+
+The repository now includes:
+
+- a Vite + React + TypeScript app in `./ui`
+- `Vitest`-based frontend tests
+- `Ant Design` with a shared provider and theme wrapper
+- TanStack Router-based client routes
+- typed JSON API access for repositories, runs, run detail, and summary data
+- a dashboard view and a run detail view
+- Vite `/api/*` proxying for local development
+- production asset serving from `crates/web`
+
+The only caveat is verification scope: the implementation is present and repository checks run it, but any purely manual browser-level verification should be treated as an operational check rather than an unfinished code task.
+
 # What problem is this plan solving?
 
 `cid` already has a minimal web surface in [`crates/web`](/data/projects/cid/crates/web), but that surface is currently a hand-built HTML response with YAML endpoints.
@@ -175,24 +192,24 @@ The main risks are:
 
 # How should this work be tracked?
 
-- [ ] Create `./ui/package.json` with `pnpm` scripts for `dev`, `build`, `test`, and `test:run`
-- [ ] Scaffold the Vite React app in `./ui`
-- [ ] Add TypeScript configuration for the Vite app
-- [ ] Add `Vitest`, `jsdom`, and frontend test setup files
-- [ ] Add `Ant Design` and a shared `ConfigProvider` theme wrapper
-- [ ] Add `@tanstack/react-router` and a minimal application route structure
-- [ ] Add a frontend API client layer with typed JSON responses
-- [ ] Add JSON API responses in `crates/web` for repositories, runs, and run detail
-- [ ] Add Vite dev proxy configuration for `/api/*`
-- [ ] Implement the initial dashboard and recent runs views
-- [ ] Implement the initial run detail view
-- [ ] Add empty, loading, and error states for the first screens
-- [ ] Add colocated frontend tests for the app shell, routing, and at least one data-backed screen
-- [ ] Add production serving for `./ui/dist` in `crates/web`
-- [ ] Remove or retire the inline HTML dashboard once parity is reached
-- [ ] Run `pnpm test:run` in `./ui`
-- [ ] Run `pnpm build` in `./ui`
-- [ ] Run `./scripts/check-code.sh`
+- [x] Create `./ui/package.json` with `pnpm` scripts for `dev`, `build`, `test`, and `test:run`
+- [x] Scaffold the Vite React app in `./ui`
+- [x] Add TypeScript configuration for the Vite app
+- [x] Add `Vitest`, `jsdom`, and frontend test setup files
+- [x] Add `Ant Design` and a shared `ConfigProvider` theme wrapper
+- [x] Add `@tanstack/react-router` and a minimal application route structure
+- [x] Add a frontend API client layer with typed JSON responses
+- [x] Add JSON API responses in `crates/web` for repositories, runs, and run detail
+- [x] Add Vite dev proxy configuration for `/api/*`
+- [x] Implement the initial dashboard and recent runs views
+- [x] Implement the initial run detail view
+- [x] Add empty, loading, and error states for the first screens
+- [x] Add colocated frontend tests for the app shell, routing, and at least one data-backed screen
+- [x] Add production serving for `./ui/dist` in `crates/web`
+- [x] Remove or retire the inline HTML dashboard once parity is reached
+- [x] Run `pnpm test:run` in `./ui`
+- [x] Run `pnpm build` in `./ui`
+- [x] Run `./scripts/check-code.sh`
 
 # How should the work be verified?
 
@@ -205,3 +222,11 @@ Verification should include:
 - repository-wide verification through `./scripts/check-code.sh`
 
 If the repository-wide check does not yet cover the frontend toolchain, that gap should be called out explicitly and closed in follow-up work instead of being ignored.
+
+# What follow-up work is outside this completed plan?
+
+Future work can improve the UI, but it is outside the bootstrap scope:
+
+- richer repository-specific views if the product wants more than dashboard cards
+- stronger browser-level smoke checks in CI if manual verification becomes a maintenance problem
+- deeper visual polish once the product surface stabilizes
