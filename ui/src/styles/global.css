@@ -104,9 +104,88 @@ a {
 }
 
 .app-content {
-  width: min(1200px, calc(100vw - 32px));
+  width: min(1320px, calc(100vw - 32px));
   margin: 0 auto;
   padding: 32px 0 48px;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.app-sidebar {
+  position: sticky;
+  top: 74px;
+  padding: 14px 12px;
+  border-radius: 20px;
+  background: rgba(255, 251, 245, 0.72);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.05);
+}
+
+.app-sidebar-label {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.app-sidebar-label:not(:first-child) {
+  margin-top: 16px;
+}
+
+.app-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-tree-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-tree-children {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.app-tree-link {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 12px;
+  text-decoration: none;
+  color: #334155;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.app-tree-link:hover,
+.app-tree-link-active {
+  color: #0f172a;
+  background: rgba(15, 118, 110, 0.14);
+}
+
+.app-tree-link-branch {
+  padding: 6px 8px;
+  font-size: 0.92rem;
+  color: #475569;
+}
+
+.app-main {
+  min-width: 0;
 }
 
 .page-stack {
@@ -172,6 +251,14 @@ a {
   .app-content {
     width: min(100vw - 24px, 1200px);
     padding-top: 24px;
+  }
+
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .app-sidebar {
+    position: static;
   }
 
   .run-title-row {
