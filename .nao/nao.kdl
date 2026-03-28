@@ -1,4 +1,6 @@
 recipe "default" {
+  config live-display="line-per-task" max-parallel-tasks=8
+
   task "build" description="Build the cid workspace" {
     run shell="""
       cargo build \
@@ -38,10 +40,27 @@ recipe "default" {
     """
   }
 
+  task "ui-test" description="Run the UI test suite" {
+    run shell="""
+      pnpm --dir ui test:run
+      NAO_TASK_OUTCOME="UI tests passed"
+    """
+  }
+
+  task "ui-build" description="Build the UI bundle" {
+    run shell="""
+      pnpm --dir ui build
+      NAO_TASK_OUTCOME="UI production build succeeded"
+    """
+    artifact "ui-dist" path="ui/dist"
+  }
+
   task "check" description="Run all repository verification tasks" {
     depends-on "fmt"
     depends-on "clippy"
     depends-on "test"
+    depends-on "ui-test"
+    depends-on "ui-build"
     run shell="""
       printf 'All repository verification tasks completed.\n'
     """
