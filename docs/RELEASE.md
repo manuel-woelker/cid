@@ -8,7 +8,7 @@ Use it when publishing a crates.io release or shipping GitHub release artifacts.
 The release flow has two parts:
 
 - `./scripts/release.sh` prepares or validates the release version
-- `./scripts/release.sh package-binary` builds a self-contained `cid` binary with the web UI appended as SquashFS
+- `./scripts/build-release.sh` builds a self-contained `cid` binary with the web UI appended as SquashFS
 - `.github/workflows/release.yml` builds that packaged binary and attaches artifacts to a GitHub release when a `v*` tag is pushed
 
 # What must be true before a release?

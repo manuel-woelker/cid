@@ -32,6 +32,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes squashfs-tools
+          command -v mksquashfs
+          mksquashfs -version
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -46,7 +48,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Package self-contained release binary
-        run: ./scripts/release.sh package-binary
+        run: ./scripts/build-release.sh
 
       - name: Package release artifacts
         env:
