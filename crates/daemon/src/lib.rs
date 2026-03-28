@@ -16,4 +16,4 @@ pub use repository::{
 };
 pub use run::{Run, RunEvent, RunStep, RunSummary};
 pub use run_status::RunStatus;
-pub use runner::{DockerRunCommand, DockerRunner};
+pub use runner::DockerRunner;

@@ -1,15 +1,20 @@
-use std::process::Command;
-
 use cid_base::shared_string::SharedString;
+use cid_pal::pal::PalHandle;
+use cid_pal::process_command::ProcessCommand;
+use cid_pal::process_event::ProcessEvent;
+use cid_pal::process_event_sink::ProcessEventSink;
+use cid_pal::process_output_stream::ProcessOutputStream;
 
 use crate::repository::{DiscoveredCommit, Repository};
 
-#[derive(Debug, Default)]
-pub struct RepositoryWatcher;
+#[derive(Debug, Clone)]
+pub struct RepositoryWatcher {
+    pal: PalHandle,
+}
 
 impl RepositoryWatcher {
-    pub fn new() -> Self {
-        Self
+    pub fn new(pal: PalHandle) -> Self {
+        Self { pal }
     }
 
     pub fn poll(
@@ -29,7 +34,7 @@ impl RepositoryWatcher {
                 .collect();
 
             for branch in branches {
-                match resolve_branch_head(repository, &branch) {
+                match resolve_branch_head(&self.pal, repository, &branch) {
                     Ok(commit_sha) => {
                         repository.mark_seen(now_ms);
                         if !existing_commits.iter().any(|existing| {
@@ -63,22 +68,27 @@ impl RepositoryWatcher {
 }
 
 fn resolve_branch_head(
+    pal: &PalHandle,
     repository: &Repository,
     branch: &str,
 ) -> Result<SharedString, SharedString> {
-    let output = Command::new("git")
-        .current_dir(repository.path().as_path())
-        .args(["rev-parse", &format!("refs/heads/{branch}")])
-        .output()
-        .map_err(|error| {
-            SharedString::new(format!(
-                "failed to invoke git for `{}`: {error}",
-                repository.name()
-            ))
-        })?;
+    let command = ProcessCommand {
+        executable: "git".into(),
+        arguments: vec!["rev-parse".into(), format!("refs/heads/{branch}").into()],
+        working_directory: Some(repository.path().clone()),
+        environment: Vec::new(),
+    };
+    let mut sink = OutputCollector::default();
+    let result = pal.run_process(&command, &mut sink).map_err(|error| {
+        SharedString::new(format!(
+            "failed to invoke git for `{}`: {}",
+            repository.name(),
+            error.to_test_string()
+        ))
+    })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    if result.exit_code != Some(0) {
+        let stderr = String::from_utf8_lossy(&sink.stderr);
         return Err(SharedString::new(format!(
             "failed to resolve branch `{branch}` for `{}`: {}",
             repository.name(),
@@ -86,7 +96,25 @@ fn resolve_branch_head(
         )));
     }
 
-    parse_commit_sha(&output.stdout).map_err(Into::into)
+    parse_commit_sha(&sink.stdout).map_err(Into::into)
+}
+
+#[derive(Default)]
+struct OutputCollector {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl ProcessEventSink for OutputCollector {
+    fn handle_event(&mut self, event: ProcessEvent) -> cid_base::result::CidResult<()> {
+        if let ProcessEvent::Output(output) = event {
+            match output.stream {
+                ProcessOutputStream::Stdout => self.stdout.extend(output.bytes),
+                ProcessOutputStream::Stderr => self.stderr.extend(output.bytes),
+            }
+        }
+        Ok(())
+    }
 }
 
 fn parse_commit_sha(output: &[u8]) -> Result<SharedString, String> {
@@ -99,7 +127,33 @@ fn parse_commit_sha(output: &[u8]) -> Result<SharedString, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_commit_sha;
+    use cid_base::file_path::FilePath;
+    use cid_base::timestamp::Timestamp;
+    use cid_pal::pal::PalHandle;
+    use cid_pal::pal_mock::PalMock;
+    use cid_pal::process_command::ProcessCommand;
+    use cid_pal::process_event::ProcessEvent;
+    use cid_pal::process_output_event::ProcessOutputEvent;
+    use cid_pal::process_output_stream::ProcessOutputStream;
+    use cid_pal::process_result::ProcessResult;
+
+    use crate::repository::{BranchRule, Pipeline, PipelineStep, Repository};
+
+    use super::{RepositoryWatcher, parse_commit_sha};
+
+    fn repository() -> Repository {
+        Repository::new(
+            1,
+            "cid",
+            FilePath::new("/repos/cid"),
+            vec![BranchRule::new("main")],
+            Pipeline::new(
+                "rust:1.85",
+                vec![PipelineStep::new("test", "cargo test")],
+                Vec::new(),
+            ),
+        )
+    }
 
     #[test]
     fn parse_commit_sha_trims_newlines() {
@@ -111,5 +165,37 @@ mod tests {
     fn parse_commit_sha_rejects_short_values() {
         let error = parse_commit_sha(b"bad\n").unwrap_err();
         assert!(error.contains("invalid commit SHA"));
+    }
+
+    #[test]
+    fn watcher_discovers_new_commit_from_pal_process_output() {
+        let pal = PalMock::new();
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "git".into(),
+                arguments: vec!["rev-parse".into(), "refs/heads/main".into()],
+                working_directory: Some(FilePath::new("/repos/cid")),
+                environment: Vec::new(),
+            },
+            vec![ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(1),
+                stream: ProcessOutputStream::Stdout,
+                bytes: b"abc1234\n".to_vec(),
+            })],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(2),
+                exit_code: Some(0),
+            },
+        );
+
+        let watcher = RepositoryWatcher::new(PalHandle::new(pal));
+        let mut repositories = vec![repository()];
+
+        let discoveries = watcher.poll(&mut repositories, &[], 42);
+
+        assert_eq!(discoveries.len(), 1);
+        assert_eq!(discoveries[0].commit_sha(), "abc1234");
+        assert_eq!(repositories[0].status().last_seen_at_ms(), Some(42));
     }
 }

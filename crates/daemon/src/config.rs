@@ -1,8 +1,8 @@
-use std::fs;
 use std::time::Duration;
 
 use cid_base::file_path::FilePath;
 use cid_base::result::{CidResult, ResultExt};
+use cid_pal::pal::Pal;
 use serde::{Deserialize, Serialize};
 
 use crate::repository::{BranchRule, Pipeline, PipelineStep, Repository};
@@ -53,13 +53,14 @@ struct PipelineStepConfig {
 }
 
 impl CidConfig {
-    pub fn load_from_path(path: &FilePath) -> CidResult<Self> {
-        let contents = fs::read_to_string(path)
+    pub fn load_from_path(path: &FilePath, pal: &dyn Pal) -> CidResult<Self> {
+        let contents = pal
+            .read_file_to_string(path)
             .with_context(|| format!("failed to read config file `{path}`"))?;
         let config: Self = serde_yaml::from_str(&contents)
             .with_context(|| format!("failed to parse config file `{path}`"))?;
 
-        config.validate()?;
+        config.validate(pal)?;
         Ok(config)
     }
 
@@ -87,9 +88,9 @@ impl CidConfig {
             .collect()
     }
 
-    fn validate(&self) -> CidResult<()> {
+    fn validate(&self, pal: &dyn Pal) -> CidResult<()> {
         for repository in &self.repositories {
-            repository.validate()?;
+            repository.validate(pal)?;
         }
 
         Ok(())
@@ -126,24 +127,22 @@ impl Default for PipelineConfig {
 }
 
 impl RepositoryConfig {
-    fn validate(&self) -> CidResult<()> {
-        let path = self.path.as_path();
-
-        if !path.exists() {
+    fn validate(&self, pal: &dyn Pal) -> CidResult<()> {
+        if !pal.file_exists(&self.path)? {
             return Err(cid_base::err!(
                 "configured repository path does not exist: {}",
                 self.path
             ));
         }
 
-        if !path.is_dir() {
+        if !pal.directory_exists(&self.path)? {
             return Err(cid_base::err!(
                 "configured repository path is not a directory: {}",
                 self.path
             ));
         }
 
-        if !path.join(".git").exists() {
+        if !pal.file_exists(&self.path.join(".git"))? {
             return Err(cid_base::err!(
                 "configured repository path is not a git repository: {}",
                 self.path
@@ -168,8 +167,6 @@ impl RepositoryConfig {
     }
 
     fn to_repository(&self, id: u64) -> CidResult<Repository> {
-        self.validate()?;
-
         let name = self
             .name
             .clone()
@@ -229,71 +226,42 @@ fn default_steps() -> Vec<PipelineStepConfig> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use cid_base::file_path::FilePath;
+    use cid_pal::pal_mock::PalMock;
 
     use super::CidConfig;
 
-    fn temp_test_dir(name: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("cid-{name}-{unique}"))
-    }
-
     #[test]
     fn load_from_path_parses_repository_entries() {
-        let root = temp_test_dir("config-parse");
-        let repo_path = root.join("foo");
-        fs::create_dir_all(repo_path.join(".git")).unwrap();
+        let pal = PalMock::new();
+        pal.set_directory("repos/foo");
+        pal.set_directory("repos/foo/.git");
+        pal.set_file(
+            "cid-config.yaml",
+            "state_dir: state\npoll_interval_seconds: 5\nrepositories:\n  - path: repos/foo\n    branches: [main]\n    pipeline:\n      image: rust:1.85\n      steps:\n        - name: test\n          command: cargo test\n",
+        );
 
-        let config_path = root.join("cid-config.yaml");
-        fs::write(
-            &config_path,
-            format!(
-                "state_dir: {}\npoll_interval_seconds: 5\nrepositories:\n  - path: {}\n    branches: [main]\n    pipeline:\n      image: rust:1.85\n      steps:\n        - name: test\n          command: cargo test\n",
-                root.join("state").display(),
-                repo_path.display(),
-            ),
-        )
-        .unwrap();
-
-        let config = CidConfig::load_from_path(&FilePath::new(&config_path)).unwrap();
+        let config = CidConfig::load_from_path(&FilePath::new("cid-config.yaml"), &pal).unwrap();
         let repositories = config.repositories().unwrap();
 
         assert_eq!(config.poll_interval().as_secs(), 5);
         assert_eq!(repositories.len(), 1);
         assert_eq!(repositories[0].name(), "foo");
         assert_eq!(repositories[0].pipeline().image(), "rust:1.85");
-
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn load_from_path_rejects_non_git_directories() {
-        let root = temp_test_dir("config-invalid");
-        let repo_path = root.join("foo");
-        fs::create_dir_all(&repo_path).unwrap();
+        let pal = PalMock::new();
+        pal.set_directory("repos/foo");
+        pal.set_file("cid-config.yaml", "repositories:\n  - path: repos/foo\n");
 
-        let config_path = root.join("cid-config.yaml");
-        fs::write(
-            &config_path,
-            format!("repositories:\n  - path: {}\n", repo_path.display()),
-        )
-        .unwrap();
-
-        let error = CidConfig::load_from_path(&FilePath::new(&config_path)).unwrap_err();
+        let error = CidConfig::load_from_path(&FilePath::new("cid-config.yaml"), &pal).unwrap_err();
 
         assert!(
             error
                 .to_test_string()
                 .contains("configured repository path is not a git repository")
         );
-
-        fs::remove_dir_all(root).unwrap();
     }
 }

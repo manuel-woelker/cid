@@ -1,6 +1,5 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use cid_base::result::CidResult;
+use cid_pal::pal::PalHandle;
 use serde::{Deserialize, Serialize};
 
 use crate::config::CidConfig;
@@ -13,6 +12,7 @@ use crate::watcher::RepositoryWatcher;
 
 #[derive(Debug)]
 pub struct CidDaemon {
+    pal: PalHandle,
     store: CidStateStore,
     watcher: RepositoryWatcher,
     scheduler: Scheduler,
@@ -35,17 +35,18 @@ pub struct RunCycleReport {
 }
 
 impl CidDaemon {
-    pub fn from_config(config: &CidConfig) -> CidResult<Self> {
-        let store = CidStateStore::new(config.state_dir().clone());
+    pub fn from_config(config: &CidConfig, pal: PalHandle) -> CidResult<Self> {
+        let store = CidStateStore::new(config.state_dir().clone(), pal.clone());
         let mut state = store.load()?;
         let repositories = config.repositories()?;
         sync_repositories(&mut state, repositories);
         store.save(&state)?;
 
         Ok(Self {
-            runner: DockerRunner::new(store.clone()),
+            runner: DockerRunner::new(store.clone(), pal.clone()),
             scheduler: Scheduler::new(),
-            watcher: RepositoryWatcher::new(),
+            watcher: RepositoryWatcher::new(pal.clone()),
+            pal,
             store,
             state,
         })
@@ -68,7 +69,7 @@ impl CidDaemon {
     }
 
     pub fn run_cycle(&mut self) -> CidResult<RunCycleReport> {
-        let now_ms = now_ms();
+        let now_ms = self.now_ms();
         let discoveries = self.watcher.poll(
             &mut self.state.repositories,
             &self.state.discovered_commits,
@@ -94,6 +95,18 @@ impl CidDaemon {
             executed_runs,
         })
     }
+
+    pub fn sleep(&self, duration: std::time::Duration) {
+        self.pal.sleep(duration);
+    }
+
+    fn now_ms(&self) -> u64 {
+        self.pal
+            .system_time()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
 }
 
 impl DaemonState {
@@ -112,13 +125,6 @@ impl DaemonState {
 
 fn sync_repositories(state: &mut DaemonState, repositories: Vec<Repository>) {
     state.repositories = repositories;
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 #[cfg(test)]

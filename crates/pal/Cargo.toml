@@ -1,0 +1,11 @@
+[package]
+name = "cid-pal"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+description = "Platform abstraction layer for cid"
+
+[dependencies]
+cid-base = { path = "../base", version = "0.1.0" }
+expect-test = { workspace = true }

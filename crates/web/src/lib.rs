@@ -4,11 +4,12 @@ use std::net::{TcpListener, TcpStream};
 use cid_base::file_path::FilePath;
 use cid_base::result::{CidResult, ResultExt};
 use cid_daemon::{CidStateStore, DaemonState, RunSummary};
+use cid_pal::pal::PalHandle;
 
-pub fn serve(address: &str, state_dir: FilePath) -> CidResult<()> {
+pub fn serve(address: &str, state_dir: FilePath, pal: PalHandle) -> CidResult<()> {
     let listener = TcpListener::bind(address)
         .with_context(|| format!("failed to bind web server to `{address}`"))?;
-    let store = CidStateStore::new(state_dir);
+    let store = CidStateStore::new(state_dir, pal);
 
     for stream in listener.incoming() {
         let mut stream = stream.context("failed to accept web connection")?;

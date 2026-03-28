@@ -4,6 +4,7 @@ use cid_base::cli::try_main;
 use cid_base::file_path::FilePath;
 use cid_base::result::CidResult;
 use cid_daemon::CidConfig;
+use cid_pal::pal_real::PalReal;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -11,14 +12,16 @@ fn main() -> ExitCode {
 }
 
 fn run() -> CidResult<()> {
-    let config = CidConfig::load_from_path(&FilePath::new("cid-config.yaml"))?;
-    let mut daemon = cid_daemon::CidDaemon::from_config(&config)?;
+    let pal = PalReal::new_handle();
+    let config = CidConfig::load_from_path(&FilePath::new("cid-config.yaml"), &*pal)?;
+    let mut daemon = cid_daemon::CidDaemon::from_config(&config, pal.clone())?;
 
     if config.web().enabled() {
         let address = config.web().address().to_string();
         let state_dir = config.state_dir().clone();
+        let web_pal = pal.clone();
         thread::spawn(move || {
-            if let Err(error) = cid_web::serve(&address, state_dir) {
+            if let Err(error) = cid_web::serve(&address, state_dir, web_pal) {
                 eprintln!("{}", error.to_test_string());
             }
         });
@@ -37,6 +40,6 @@ fn run() -> CidResult<()> {
             report.queued_runs,
             report.executed_runs
         );
-        thread::sleep(config.poll_interval());
+        daemon.sleep(config.poll_interval());
     }
 }

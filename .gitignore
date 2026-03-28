@@ -7,5 +7,6 @@
 /sandboxes/*
 !/sandboxes/.gitkeep
 /.cache
+/.cid/
 perf.data*
 flamegraph.svg

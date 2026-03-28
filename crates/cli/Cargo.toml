@@ -9,4 +9,5 @@ description = "CLI entrypoint for cid"
 [dependencies]
 cid-base = { path = "../base", version = "0.1.0" }
 cid-daemon = { path = "../daemon", version = "0.1.0" }
+cid-pal = { path = "../pal", version = "0.1.0" }
 cid-web = { path = "../web", version = "0.1.0" }
