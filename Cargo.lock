@@ -74,16 +74,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "cid"
-version = "0.1.0"
-dependencies = [
- "cid-base",
- "cid-daemon",
- "cid-pal",
- "cid-web",
-]
-
-[[package]]
 name = "cid-base"
 version = "0.1.0"
 dependencies = [
@@ -114,6 +104,16 @@ version = "0.1.0"
 dependencies = [
  "cid-base",
  "expect-test",
+]
+
+[[package]]
+name = "cid-server"
+version = "0.1.0"
+dependencies = [
+ "cid-base",
+ "cid-daemon",
+ "cid-pal",
+ "cid-web",
 ]
 
 [[package]]

@@ -42,7 +42,7 @@ The first version should not optimize for:
 The recommended initial workspace layout is:
 
 - `crates/base`
-- `crates/cli`
+- `crates/server`
 - `crates/daemon`
 - `crates/web`
 
@@ -50,7 +50,7 @@ Responsibilities:
 
 - `crates/base`
   Shared utility types, error handling, logging, and other low-level helpers already started in the repository.
-- `crates/cli`
+- `crates/server`
   Thin process entrypoint and command parsing for starting the daemon, registering repositories, and inspecting status.
 - `crates/daemon`
   Core runtime logic: repository registry, Git watcher, scheduler, queue, runner integration, and persistence.
