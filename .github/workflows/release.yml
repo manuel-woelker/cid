@@ -18,6 +18,21 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install squashfs-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes squashfs-tools
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -30,8 +45,8 @@ jobs:
             ${{ runner.os }}-cargo-release-
             ${{ runner.os }}-cargo-
 
-      - name: Build release binary
-        run: cargo build --release -p cid-server --locked
+      - name: Package self-contained release binary
+        run: ./scripts/release.sh package-binary
 
       - name: Package release artifacts
         env:
@@ -43,7 +58,7 @@ jobs:
           ARTIFACT_DIR="dist/${ARCHIVE_BASENAME}"
 
           mkdir -p "${ARTIFACT_DIR}"
-          cp target/release/cid "${ARTIFACT_DIR}/cid"
+          cp dist/cid "${ARTIFACT_DIR}/cid"
           cp README.md "${ARTIFACT_DIR}/README.md"
 
           tar -C dist -czf "dist/${ARCHIVE_BASENAME}.tar.gz" "${ARCHIVE_BASENAME}"

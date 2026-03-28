@@ -3,6 +3,19 @@
 This plan defines how to ship the web UI from a self-contained `cid` binary.
 The goal is to package `ui/dist` into a SquashFS image during release, append that image to the final executable with a small trailer, and teach the web server to serve non-`/api/` requests from the embedded filesystem through `backhand`.
 
+# What is the current status?
+
+This plan is complete and the repository now includes:
+
+- embedded SquashFS asset loading in [`crates/web`](/data/projects/cid/crates/web)
+- executable trailer parsing for the appended `SQUASHFS` payload
+- a filesystem fallback to `ui/dist` for local development
+- a `package-binary` mode in [`scripts/release.sh`](/data/projects/cid/scripts/release.sh)
+- GitHub release workflow changes that build the self-contained binary artifact
+
+The remaining caveat is local packaging verification scope.
+The runtime and script path are covered by tests and smoke checks, but this development environment did not have a real `mksquashfs` binary installed, so the packaging smoke run used a temporary stub for the SquashFS creation step.
+
 # What problem is this plan solving?
 
 Today [`crates/web/src/lib.rs`](/data/projects/cid/crates/web/src/lib.rs) serves frontend assets directly from `ui/dist` on the host filesystem.
@@ -178,22 +191,22 @@ This order keeps the trailer format and runtime loader testable before the relea
 
 # How should this work be tracked?
 
-- [ ] Add `backhand` to the relevant crate dependencies
-- [ ] Add a small `crates/web` module for reading the appended `SQUASHFS` trailer from the current executable
-- [ ] Make the trailer reader validate magic, size, and bounds defensively
-- [ ] Add an asset-source type that supports embedded SquashFS assets and filesystem assets
-- [ ] Switch non-`/api/` request handling in `crates/web` to read through the asset source
-- [ ] Preserve SPA fallback to `index.html` for frontend routes served from the embedded image
-- [ ] Preserve or improve content-type handling for embedded assets
-- [ ] Keep a filesystem fallback for local development when no embedded payload is present
-- [ ] Update `scripts/release.sh` to run `pnpm --dir ui build`
-- [ ] Update `scripts/release.sh` to create a SquashFS image from `ui/dist`
-- [ ] Update `scripts/release.sh` to append the image, 32-bit size trailer, and `SQUASHFS` magic to the release binary
-- [ ] Add release-script validation that the packaged binary contains a readable trailer
-- [ ] Add colocated unit tests for trailer parsing and bounds validation
-- [ ] Add colocated tests for embedded asset lookup, content types, and SPA fallback behavior
-- [ ] Add a smoke test or scripted verification that the packaged binary serves the UI without `ui/dist` on disk
-- [ ] Run `./scripts/check-code.sh`
+- [x] Add `backhand` to the relevant crate dependencies
+- [x] Add a small `crates/web` module for reading the appended `SQUASHFS` trailer from the current executable
+- [x] Make the trailer reader validate magic, size, and bounds defensively
+- [x] Add an asset-source type that supports embedded SquashFS assets and filesystem assets
+- [x] Switch non-`/api/` request handling in `crates/web` to read through the asset source
+- [x] Preserve SPA fallback to `index.html` for frontend routes served from the embedded image
+- [x] Preserve or improve content-type handling for embedded assets
+- [x] Keep a filesystem fallback for local development when no embedded payload is present
+- [x] Update `scripts/release.sh` to run `pnpm --dir ui build`
+- [x] Update `scripts/release.sh` to create a SquashFS image from `ui/dist`
+- [x] Update `scripts/release.sh` to append the image, 32-bit size trailer, and `SQUASHFS` magic to the release binary
+- [x] Add release-script validation that the packaged binary contains a readable trailer
+- [x] Add colocated unit tests for trailer parsing and bounds validation
+- [x] Add colocated tests for embedded asset lookup, content types, and SPA fallback behavior
+- [x] Add a smoke test or scripted verification that the packaged binary serves the UI without `ui/dist` on disk
+- [x] Run `./scripts/check-code.sh`
 
 # How should the work be verified?
 
@@ -205,6 +218,12 @@ Verification should include:
 - a release-packaging check that builds a binary with an appended SquashFS image and confirms the reader can open it
 - a smoke check that starts the packaged binary after hiding or removing `ui/dist` and confirms `/` returns the built frontend
 - repository-wide verification through `./scripts/check-code.sh`
+
+What landed was verified with:
+
+- `cargo test -p cid-web`
+- `./scripts/check-code.sh`
+- `./scripts/release.sh package-binary` using a temporary `mksquashfs` stub, because the real tool was not installed in this environment
 
 # What improvements or follow-up work are worth considering?
 

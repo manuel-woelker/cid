@@ -8,7 +8,8 @@ Use it when publishing a crates.io release or shipping GitHub release artifacts.
 The release flow has two parts:
 
 - `./scripts/release.sh` prepares or validates the release version
-- `.github/workflows/release.yml` builds the release binary and attaches artifacts to a GitHub release when a `v*` tag is pushed
+- `./scripts/release.sh package-binary` builds a self-contained `cid` binary with the web UI appended as SquashFS
+- `.github/workflows/release.yml` builds that packaged binary and attaches artifacts to a GitHub release when a `v*` tag is pushed
 
 # What must be true before a release?
 
@@ -25,6 +26,7 @@ Keep the early release flow deliberately small:
 
 - one shared workspace version
 - one release binary for Linux first
+- one self-contained binary artifact instead of sidecar UI files
 - no elaborate multi-platform packaging until the binary is actually useful
 
 Premature release infrastructure is a great way to waste time on decorative nonsense.

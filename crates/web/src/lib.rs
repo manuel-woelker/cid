@@ -1,23 +1,26 @@
+mod asset_source;
+mod embedded_assets;
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
+use asset_source::AssetSource;
 use cid_base::file_path::FilePath;
 use cid_base::result::{CidResult, ResultExt};
 use cid_daemon::{CidStateStore, DaemonState, Run, RunSummary};
-use cid_pal::pal::PalHandle;
 use serde::Serialize;
 
 const UI_DIST_DIR: &str = "ui/dist";
 
-pub fn serve(address: &str, state_dir: FilePath, pal: PalHandle) -> CidResult<()> {
+pub fn serve(address: &str, state_dir: FilePath, pal: cid_pal::pal::PalHandle) -> CidResult<()> {
     let listener = TcpListener::bind(address)
         .with_context(|| format!("failed to bind web server to `{address}`"))?;
     let store = CidStateStore::new(state_dir);
-    let asset_root = FilePath::new(UI_DIST_DIR);
+    let asset_source = AssetSource::load(pal, FilePath::new(UI_DIST_DIR))?;
 
     for stream in listener.incoming() {
         let mut stream = stream.context("failed to accept web connection")?;
-        handle_connection(&mut stream, &store, pal.clone(), &asset_root)?;
+        handle_connection(&mut stream, &store, &asset_source)?;
     }
 
     Ok(())
@@ -26,8 +29,7 @@ pub fn serve(address: &str, state_dir: FilePath, pal: PalHandle) -> CidResult<()
 fn handle_connection(
     stream: &mut TcpStream,
     store: &CidStateStore,
-    pal: PalHandle,
-    asset_root: &FilePath,
+    asset_source: &AssetSource,
 ) -> CidResult<()> {
     let mut buffer = [0; 4096];
     let read = stream
@@ -36,15 +38,14 @@ fn handle_connection(
     let request = String::from_utf8_lossy(&buffer[..read]);
     let path = request_path(&request);
 
-    let response = route_request(path, store, pal, asset_root)?;
+    let response = route_request(path, store, asset_source)?;
     write_response(stream, &response)
 }
 
 fn route_request(
     path: &str,
     store: &CidStateStore,
-    pal: PalHandle,
-    asset_root: &FilePath,
+    asset_source: &AssetSource,
 ) -> CidResult<HttpResponse> {
     let state = store.load()?;
 
@@ -56,7 +57,7 @@ fn route_request(
             Some(run) => json_response(run),
             None => Ok(text_response("404 Not Found", "run not found")),
         },
-        _ => asset_response(path, &pal, asset_root),
+        _ => asset_response(path, asset_source),
     }
 }
 
@@ -79,25 +80,27 @@ fn text_response(status: &'static str, body: &str) -> HttpResponse {
     )
 }
 
-fn asset_response(path: &str, pal: &PalHandle, asset_root: &FilePath) -> CidResult<HttpResponse> {
-    let Some(asset_path) = resolve_asset_path(path, asset_root) else {
+fn asset_response(path: &str, asset_source: &AssetSource) -> CidResult<HttpResponse> {
+    let Some(asset_path) = resolve_asset_path(path) else {
         return Ok(text_response("404 Not Found", "not found"));
     };
 
-    if pal.file_exists(&asset_path)? {
+    if let Some(asset_bytes) = asset_source.read(&asset_path)? {
         return Ok(HttpResponse::new(
             "200 OK",
             content_type_for_path(&asset_path),
-            read_file_bytes(pal, &asset_path)?,
+            asset_bytes,
         ));
     }
 
-    let index_path = asset_root.join("index.html");
-    if should_use_spa_fallback(path) && pal.file_exists(&index_path)? {
+    let index_path = FilePath::new("index.html");
+    if should_use_spa_fallback(path)
+        && let Some(index_bytes) = asset_source.read(&index_path)?
+    {
         return Ok(HttpResponse::new(
             "200 OK",
             "text/html; charset=utf-8",
-            read_file_bytes(pal, &index_path)?,
+            index_bytes,
         ));
     }
 
@@ -111,15 +114,6 @@ fn asset_response(path: &str, pal: &PalHandle, asset_root: &FilePath) -> CidResu
 
     Ok(text_response("404 Not Found", "not found"))
 }
-
-fn read_file_bytes(pal: &PalHandle, path: &FilePath) -> CidResult<Vec<u8>> {
-    let mut file = pal.read_file(path)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)
-        .with_context(|| format!("failed to read asset `{path}`"))?;
-    Ok(buffer)
-}
-
 fn write_response(stream: &mut TcpStream, response: &HttpResponse) -> CidResult<()> {
     let header = format!(
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -152,23 +146,23 @@ fn find_run<'a>(state: &'a DaemonState, path: &str) -> Option<&'a Run> {
         .and_then(|run_id| state.runs().iter().find(|run| run.id() == run_id))
 }
 
-fn resolve_asset_path(path: &str, asset_root: &FilePath) -> Option<FilePath> {
+fn resolve_asset_path(path: &str) -> Option<FilePath> {
     if path.contains("..") {
         return None;
     }
 
-    let relative = if path == "/" {
+    let relative_path = if path == "/" {
         FilePath::new("index.html")
     } else {
         FilePath::from_string(path.trim_start_matches('/'))
     };
 
-    let normalized = relative.normalize();
+    let normalized = relative_path.normalize();
     if normalized.as_str().starts_with("../") {
         return None;
     }
 
-    Some(asset_root.join(normalized.as_str()))
+    Some(normalized)
 }
 
 fn should_use_spa_fallback(path: &str) -> bool {
@@ -215,6 +209,7 @@ mod tests {
         CidStateStore, asset_response, content_type_for_path, request_path, resolve_asset_path,
         route_request,
     };
+    use crate::asset_source::AssetSource;
 
     #[test]
     fn request_path_extracts_target_from_request_line() {
@@ -231,8 +226,7 @@ mod tests {
         let response = route_request(
             "/api/summary",
             &store,
-            PalHandle::new(pal),
-            &FilePath::new("ui/dist"),
+            &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
         )
         .unwrap();
 
@@ -250,8 +244,11 @@ mod tests {
         let pal = PalMock::new();
         pal.set_file("ui/dist/index.html", "<!doctype html><title>cid</title>");
 
-        let response =
-            asset_response("/runs/7", &PalHandle::new(pal), &FilePath::new("ui/dist")).unwrap();
+        let response = asset_response(
+            "/runs/7",
+            &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
+        )
+        .unwrap();
 
         assert_eq!(response.status, "200 OK");
         assert_eq!(response.content_type, "text/html; charset=utf-8");
@@ -263,7 +260,7 @@ mod tests {
 
     #[test]
     fn resolve_asset_path_rejects_parent_segments() {
-        assert!(resolve_asset_path("/../secret.txt", &FilePath::new("ui/dist")).is_none());
+        assert!(resolve_asset_path("/../secret.txt").is_none());
     }
 
     #[test]
