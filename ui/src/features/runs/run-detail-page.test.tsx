@@ -69,7 +69,8 @@ describe("RunDetailPage", () => {
       expect(screen.getByText("Run #7 · cid")).toBeInTheDocument(),
     );
 
-    expect(screen.getByText("cargo test")).toBeInTheDocument();
+    expect(screen.getByText("Log output")).toBeInTheDocument();
+    expect(screen.getAllByText("cargo test").length).toBeGreaterThan(0);
     expect(screen.getByText("101")).toBeInTheDocument();
     expect(await screen.findByText("test log output")).toBeInTheDocument();
     expect(screen.getAllByText("failed").length).toBeGreaterThan(0);

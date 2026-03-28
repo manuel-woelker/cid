@@ -4,6 +4,7 @@ import {
   Card,
   Descriptions,
   Empty,
+  Flex,
   Space,
   Steps,
   Tag,
@@ -22,6 +23,7 @@ export function RunDetailPage() {
     from: "/repositories/$repositoryId/runs/$runId",
   });
   const [run, setRun] = useState<Run | null>(null);
+  const [selectedStepIndex, setSelectedStepIndex] = useState<number>(0);
   const [stepLogs, setStepLogs] = useState<Record<number, string>>({});
   const [stepLogErrors, setStepLogErrors] = useState<Record<number, string>>(
     {},
@@ -40,6 +42,10 @@ export function RunDetailPage() {
         const nextRun = await getRun(runId);
         if (isMounted) {
           setRun(nextRun);
+          const firstStepWithLog = nextRun.steps.findIndex(
+            (step) => step.log_path !== null,
+          );
+          setSelectedStepIndex(firstStepWithLog >= 0 ? firstStepWithLog : 0);
           setStepLogs({});
           setStepLogErrors({});
         }
@@ -138,128 +144,161 @@ export function RunDetailPage() {
     return <Empty description={`Run ${runId} was not found.`} />;
   }
 
+  const selectedStep = run?.steps[selectedStepIndex] ?? null;
+
   return (
-    <Space direction="vertical" size="large" className="page-stack">
-      <Card loading={isLoading}>
-        {run ? (
-          <Space direction="vertical" size="middle" className="page-stack">
-            <div className="run-title-row">
-              <div>
-                <Typography.Title level={2}>
-                  Run #{run.id} · {run.repository_name}
-                </Typography.Title>
-                <Typography.Paragraph>
-                  {run.branch} · {shortCommit(run.commit_sha)}
-                </Typography.Paragraph>
+    <div className="run-page-layout">
+      <Space direction="vertical" size="large" className="page-stack">
+        <Card loading={isLoading}>
+          {run ? (
+            <Space direction="vertical" size="middle" className="page-stack">
+              <div className="run-title-row">
+                <div>
+                  <Typography.Title level={2}>
+                    Run #{run.id} · {run.repository_name}
+                  </Typography.Title>
+                  <Typography.Paragraph>
+                    {run.branch} · {shortCommit(run.commit_sha)}
+                  </Typography.Paragraph>
+                </div>
+                <Tag color={statusColor(run.status)}>{run.status}</Tag>
               </div>
-              <Tag color={statusColor(run.status)}>{run.status}</Tag>
-            </div>
 
-            <Descriptions bordered column={1}>
-              <Descriptions.Item label="Queued at">
-                {formatTimestamp(run.queued_at_ms)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Started at">
-                {formatTimestamp(run.started_at_ms)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Finished at">
-                {formatTimestamp(run.finished_at_ms)}
-              </Descriptions.Item>
-              <Descriptions.Item label="Steps">
-                {run.steps.length}
-              </Descriptions.Item>
-            </Descriptions>
-          </Space>
-        ) : null}
-      </Card>
+              <Descriptions bordered column={1}>
+                <Descriptions.Item label="Queued at">
+                  {formatTimestamp(run.queued_at_ms)}
+                </Descriptions.Item>
+                <Descriptions.Item label="Started at">
+                  {formatTimestamp(run.started_at_ms)}
+                </Descriptions.Item>
+                <Descriptions.Item label="Finished at">
+                  {formatTimestamp(run.finished_at_ms)}
+                </Descriptions.Item>
+                <Descriptions.Item label="Steps">
+                  {run.steps.length}
+                </Descriptions.Item>
+              </Descriptions>
+            </Space>
+          ) : null}
+        </Card>
 
-      <Card title="Step progress" loading={isLoading}>
-        {run ? (
-          <Steps
-            direction="vertical"
-            current={run.steps.findIndex((step) => step.status !== "passed")}
-            items={run.steps.map((step) => ({
-              title: step.name,
-              status:
-                step.status === "failed"
-                  ? "error"
-                  : step.status === "passed"
-                    ? "finish"
-                    : step.status === "running"
-                      ? "process"
-                      : "wait",
-              description: `${step.command} · ${formatDuration(step.duration_ms)}`,
-            }))}
-          />
-        ) : (
-          <Empty description="No step data available." />
-        )}
-      </Card>
+        <Card title="Step progress" loading={isLoading}>
+          {run ? (
+            <Steps
+              direction="vertical"
+              current={run.steps.findIndex((step) => step.status !== "passed")}
+              items={run.steps.map((step) => ({
+                title: step.name,
+                status:
+                  step.status === "failed"
+                    ? "error"
+                    : step.status === "passed"
+                      ? "finish"
+                      : step.status === "running"
+                        ? "process"
+                        : "wait",
+                description: `${step.command} · ${formatDuration(step.duration_ms)}`,
+              }))}
+            />
+          ) : (
+            <Empty description="No step data available." />
+          )}
+        </Card>
 
-      <Card title="Step details" loading={isLoading}>
-        {run ? (
-          <Space direction="vertical" size="middle" className="page-stack">
-            {run.steps.map((step, index) => (
-              <Card key={step.name} size="small">
-                <Descriptions bordered column={1} size="small">
-                  <Descriptions.Item label="Status">
+        <Card title="Step details" loading={isLoading}>
+          {run ? (
+            <Space direction="vertical" size="middle" className="page-stack">
+              {run.steps.map((step, index) => (
+                <Card
+                  key={step.name}
+                  size="small"
+                  hoverable
+                  className={
+                    index === selectedStepIndex
+                      ? "run-step-card run-step-card-active"
+                      : "run-step-card"
+                  }
+                  onClick={() => {
+                    setSelectedStepIndex(index);
+                  }}
+                >
+                  <Flex align="start" justify="space-between" gap={16}>
+                    <Typography.Title level={5} className="run-step-title">
+                      {step.name}
+                    </Typography.Title>
                     <Tag color={statusColor(step.status)}>{step.status}</Tag>
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Command">
-                    <Typography.Text code>{step.command}</Typography.Text>
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Image">
-                    <Typography.Text code>{step.image}</Typography.Text>
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Exit code">
-                    {step.exit_code ?? "Not finished"}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Duration">
-                    {formatDuration(step.duration_ms)}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Log path">
-                    {step.log_path ? (
-                      <Typography.Text code>{step.log_path}</Typography.Text>
-                    ) : (
-                      "Not written"
-                    )}
-                  </Descriptions.Item>
-                </Descriptions>
-                {stepLogs[index] ? (
-                  <div>
-                    <Typography.Paragraph className="compact-paragraph">
-                      Step log
-                    </Typography.Paragraph>
-                    <pre>{stepLogs[index]}</pre>
-                  </div>
-                ) : null}
-                {stepLogErrors[index] ? (
-                  <Alert
-                    className="inline-alert"
-                    type="warning"
-                    showIcon
-                    message={stepLogErrors[index]}
-                  />
-                ) : null}
-              </Card>
-            ))}
-          </Space>
-        ) : (
-          <Empty description="No step details available." />
-        )}
-      </Card>
+                  </Flex>
+                  <Descriptions bordered column={1} size="small">
+                    <Descriptions.Item label="Command">
+                      <Typography.Text code>{step.command}</Typography.Text>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Image">
+                      <Typography.Text code>{step.image}</Typography.Text>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Exit code">
+                      {step.exit_code ?? "Not finished"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Duration">
+                      {formatDuration(step.duration_ms)}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Log path">
+                      {step.log_path ? (
+                        <Typography.Text code>{step.log_path}</Typography.Text>
+                      ) : (
+                        "Not written"
+                      )}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Card>
+              ))}
+            </Space>
+          ) : (
+            <Empty description="No step details available." />
+          )}
+        </Card>
 
-      <Card title="Run events" loading={isLoading}>
-        {run && run.events.length > 0 ? (
-          <Timeline
-            items={run.events.map((event) => ({
-              children: `${formatTimestamp(event.timestamp_ms)} · ${event.message}`,
-            }))}
-          />
-        ) : (
-          <Empty description="No event history is available." />
-        )}
-      </Card>
-    </Space>
+        <Card title="Run events" loading={isLoading}>
+          {run && run.events.length > 0 ? (
+            <Timeline
+              items={run.events.map((event) => ({
+                children: `${formatTimestamp(event.timestamp_ms)} · ${event.message}`,
+              }))}
+            />
+          ) : (
+            <Empty description="No event history is available." />
+          )}
+        </Card>
+      </Space>
+
+      <section className="run-log-sidebar">
+        <div className="run-log-panel">
+          <div className="run-log-panel-header">
+            <Typography.Title level={4} className="run-log-title">
+              Log output
+            </Typography.Title>
+          </div>
+
+          {isLoading ? (
+            <Card loading />
+          ) : selectedStep ? (
+            <div className="run-log-body">
+              {stepLogs[selectedStepIndex] ? (
+                <pre className="run-log-output">{stepLogs[selectedStepIndex]}</pre>
+              ) : stepLogErrors[selectedStepIndex] ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={stepLogErrors[selectedStepIndex]}
+                />
+              ) : (
+                <Empty description="No log output is available for this step." />
+              )}
+            </div>
+          ) : (
+            <Empty description="No step details available." />
+          )}
+        </div>
+      </section>
+    </div>
   );
 }
