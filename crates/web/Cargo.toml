@@ -1,12 +1,12 @@
 [package]
-name = "cid"
+name = "cid-web"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 version.workspace = true
-description = "CLI entrypoint for cid"
+description = "Local web server for cid"
 
 [dependencies]
 cid-base = { path = "../base", version = "0.1.0" }
 cid-daemon = { path = "../daemon", version = "0.1.0" }
-cid-web = { path = "../web", version = "0.1.0" }
+serde_yaml = { workspace = true }

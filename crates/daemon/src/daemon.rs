@@ -1,80 +1,151 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use cid_base::result::CidResult;
 use serde::{Deserialize, Serialize};
 
-use crate::repository::Repository;
-use crate::run::Run;
+use crate::config::CidConfig;
+use crate::persistence::CidStateStore;
+use crate::repository::{DiscoveredCommit, Repository};
+use crate::run::{Run, RunSummary};
+use crate::runner::DockerRunner;
+use crate::scheduler::Scheduler;
+use crate::watcher::RepositoryWatcher;
 
-/// Broad runtime state for the local cid daemon.
-///
-/// This holds the first durable domain types the daemon will manage and gives
-/// later watcher, scheduler, and persistence work a clear home.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct CidDaemon {
-    repositories: Vec<Repository>,
-    runs: Vec<Run>,
+    store: CidStateStore,
+    watcher: RepositoryWatcher,
+    scheduler: Scheduler,
+    runner: DockerRunner,
+    state: DaemonState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DaemonState {
+    pub(crate) repositories: Vec<Repository>,
+    pub(crate) discovered_commits: Vec<DiscoveredCommit>,
+    pub(crate) runs: Vec<Run>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RunCycleReport {
+    pub discovered_commits: usize,
+    pub queued_runs: usize,
+    pub executed_runs: usize,
 }
 
 impl CidDaemon {
-    /// Creates an empty daemon state.
-    pub fn new() -> Self {
-        Self::default()
+    pub fn from_config(config: &CidConfig) -> CidResult<Self> {
+        let store = CidStateStore::new(config.state_dir().clone());
+        let mut state = store.load()?;
+        let repositories = config.repositories()?;
+        sync_repositories(&mut state, repositories);
+        store.save(&state)?;
+
+        Ok(Self {
+            runner: DockerRunner::new(store.clone()),
+            scheduler: Scheduler::new(),
+            watcher: RepositoryWatcher::new(),
+            store,
+            state,
+        })
     }
 
-    /// Registers a repository with the daemon state.
-    pub fn add_repository(&mut self, repository: Repository) {
-        self.repositories.push(repository);
+    pub fn repositories(&self) -> &[Repository] {
+        &self.state.repositories
     }
 
-    /// Records a run in the daemon state.
-    pub fn add_run(&mut self, run: Run) {
-        self.runs.push(run);
+    pub fn runs(&self) -> &[Run] {
+        &self.state.runs
     }
 
-    /// Returns the repositories known to the daemon.
+    pub fn summary(&self) -> RunSummary {
+        RunSummary::from_runs(&self.state.runs)
+    }
+
+    pub fn state_file_path(&self) -> cid_base::file_path::FilePath {
+        self.store.state_file_path()
+    }
+
+    pub fn run_cycle(&mut self) -> CidResult<RunCycleReport> {
+        let now_ms = now_ms();
+        let discoveries = self.watcher.poll(
+            &mut self.state.repositories,
+            &self.state.discovered_commits,
+            now_ms,
+        );
+        let discovered_count = discoveries.len();
+        self.state.discovered_commits.extend(discoveries);
+
+        let queued_runs = self.scheduler.enqueue_runs(
+            &self.state.repositories,
+            &self.state.discovered_commits,
+            &mut self.state.runs,
+        );
+
+        let executed_runs = self
+            .runner
+            .execute_queued_runs(&self.state.repositories, &mut self.state.runs)?;
+        self.store.save(&self.state)?;
+
+        Ok(RunCycleReport {
+            discovered_commits: discovered_count,
+            queued_runs,
+            executed_runs,
+        })
+    }
+}
+
+impl DaemonState {
     pub fn repositories(&self) -> &[Repository] {
         &self.repositories
     }
 
-    /// Returns the runs known to the daemon.
+    pub fn discovered_commits(&self) -> &[DiscoveredCommit] {
+        &self.discovered_commits
+    }
+
     pub fn runs(&self) -> &[Run] {
         &self.runs
     }
+}
+
+fn sync_repositories(state: &mut DaemonState, repositories: Vec<Repository>) {
+    state.repositories = repositories;
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[cfg(test)]
 mod tests {
     use cid_base::file_path::FilePath;
 
-    use crate::repository::Repository;
-    use crate::run::Run;
-    use crate::run_status::RunStatus;
+    use crate::repository::{BranchRule, Pipeline, PipelineStep, Repository};
 
-    use super::CidDaemon;
+    use super::{DaemonState, sync_repositories};
 
     #[test]
-    fn daemon_starts_with_no_repositories_or_runs() {
-        let daemon = CidDaemon::new();
+    fn repository_sync_replaces_in_memory_registry() {
+        let mut state = DaemonState::default();
+        let repositories = vec![Repository::new(
+            1,
+            "cid",
+            FilePath::new("/repos/cid"),
+            vec![BranchRule::new("main")],
+            Pipeline::new(
+                "rust:1.85",
+                vec![PipelineStep::new("test", "cargo test")],
+                Vec::new(),
+            ),
+        )];
 
-        assert!(daemon.repositories().is_empty());
-        assert!(daemon.runs().is_empty());
-    }
+        sync_repositories(&mut state, repositories.clone());
 
-    #[test]
-    fn daemon_tracks_registered_repositories() {
-        let mut daemon = CidDaemon::new();
-        let repository = Repository::new("cid", FilePath::new("/repos/cid"));
-
-        daemon.add_repository(repository.clone());
-
-        assert_eq!(daemon.repositories(), &[repository]);
-    }
-
-    #[test]
-    fn daemon_tracks_recorded_runs() {
-        let mut daemon = CidDaemon::new();
-        let run = Run::new("cid", "main", "abc123", RunStatus::Queued);
-
-        daemon.add_run(run.clone());
-
-        assert_eq!(daemon.runs(), &[run]);
+        assert_eq!(state.repositories(), repositories);
     }
 }

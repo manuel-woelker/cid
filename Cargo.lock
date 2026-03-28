@@ -79,6 +79,7 @@ version = "0.1.0"
 dependencies = [
  "cid-base",
  "cid-daemon",
+ "cid-web",
 ]
 
 [[package]]
@@ -103,6 +104,15 @@ dependencies = [
  "serde",
  "serde_yaml",
  "tracing",
+]
+
+[[package]]
+name = "cid-web"
+version = "0.1.0"
+dependencies = [
+ "cid-base",
+ "cid-daemon",
+ "serde_yaml",
 ]
 
 [[package]]
