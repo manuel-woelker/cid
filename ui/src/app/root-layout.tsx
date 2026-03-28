@@ -123,11 +123,12 @@ function RootLayout() {
       return;
     }
 
+    const repositoryId = activeRepositoryId;
     let isMounted = true;
 
     async function loadBranches() {
       try {
-        const activeBranches = await getRepositoryBranches(activeRepositoryId);
+        const activeBranches = await getRepositoryBranches(repositoryId);
         if (!isMounted) {
           return;
         }
