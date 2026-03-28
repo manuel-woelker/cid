@@ -1,5 +1,3 @@
-use std::thread;
-
 use cid_base::cli::try_main;
 use cid_base::file_path::FilePath;
 use cid_base::logging::{error, info, init_logging};
@@ -7,6 +5,7 @@ use cid_base::result::CidResult;
 use cid_daemon::CidConfig;
 use cid_pal::pal_real::PalReal;
 use std::process::ExitCode;
+use std::thread;
 
 fn main() -> ExitCode {
     init_logging();
@@ -33,15 +32,5 @@ fn run() -> CidResult<()> {
         );
     }
 
-    loop {
-        let report = daemon.run_cycle()?;
-        info!(
-            repository_count = daemon.repositories().len(),
-            discovered_commits = report.discovered_commits,
-            queued_runs = report.queued_runs,
-            executed_runs = report.executed_runs,
-            "daemon cycle completed"
-        );
-        daemon.sleep(config.poll_interval());
-    }
+    daemon.run_forever(config.poll_interval())
 }

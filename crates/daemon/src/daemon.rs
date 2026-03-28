@@ -1,3 +1,4 @@
+use cid_base::logging::info;
 use cid_base::result::CidResult;
 use cid_pal::pal::PalHandle;
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,20 @@ impl CidDaemon {
             store,
             state,
         })
+    }
+
+    pub fn run_forever(&mut self, poll_interval: std::time::Duration) -> CidResult<()> {
+        loop {
+            let report = self.run_cycle()?;
+            info!(
+                repository_count = self.repositories().len(),
+                discovered_commits = report.discovered_commits,
+                queued_runs = report.queued_runs,
+                executed_runs = report.executed_runs,
+                "daemon cycle completed"
+            );
+            self.sleep(poll_interval);
+        }
     }
 
     pub fn repositories(&self) -> &[Repository] {
