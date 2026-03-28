@@ -11,7 +11,7 @@ name = "cid"
 path = "src/main.rs"
 
 [dependencies]
-cid-base = { path = "../base", version = "0.1.0" }
-cid-daemon = { path = "../daemon", version = "0.1.0" }
-cid-pal = { path = "../pal", version = "0.1.0" }
-cid-web = { path = "../web", version = "0.1.0" }
+cid-base = { path = "../base", version = "0.1.1" }
+cid-daemon = { path = "../daemon", version = "0.1.1" }
+cid-pal = { path = "../pal", version = "0.1.1" }
+cid-web = { path = "../web", version = "0.1.1" }

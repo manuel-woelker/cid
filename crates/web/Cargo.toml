@@ -7,9 +7,9 @@ version.workspace = true
 description = "Local web server for cid"
 
 [dependencies]
-cid-base = { path = "../base", version = "0.1.0" }
-cid-daemon = { path = "../daemon", version = "0.1.0" }
-cid-pal = { path = "../pal", version = "0.1.0" }
+cid-base = { path = "../base", version = "0.1.1" }
+cid-daemon = { path = "../daemon", version = "0.1.1" }
+cid-pal = { path = "../pal", version = "0.1.1" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
