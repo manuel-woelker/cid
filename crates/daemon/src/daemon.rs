@@ -37,7 +37,7 @@ pub struct RunCycleReport {
 
 impl CidDaemon {
     pub fn from_config(config: &CidConfig, pal: PalHandle) -> CidResult<Self> {
-        let store = CidStateStore::new(config.state_dir().clone(), pal.clone());
+        let store = CidStateStore::new(config.state_dir().clone());
         let mut state = store.load()?;
         let repositories = config.repositories()?;
         sync_repositories(&mut state, repositories);
@@ -125,6 +125,18 @@ impl CidDaemon {
 }
 
 impl DaemonState {
+    pub fn new(
+        repositories: Vec<Repository>,
+        discovered_commits: Vec<DiscoveredCommit>,
+        runs: Vec<Run>,
+    ) -> Self {
+        Self {
+            repositories,
+            discovered_commits,
+            runs,
+        }
+    }
+
     pub fn repositories(&self) -> &[Repository] {
         &self.repositories
     }

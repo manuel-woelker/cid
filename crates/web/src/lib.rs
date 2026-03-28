@@ -12,7 +12,7 @@ const UI_DIST_DIR: &str = "ui/dist";
 pub fn serve(address: &str, state_dir: FilePath, pal: PalHandle) -> CidResult<()> {
     let listener = TcpListener::bind(address)
         .with_context(|| format!("failed to bind web server to `{address}`"))?;
-    let store = CidStateStore::new(state_dir, pal.clone());
+    let store = CidStateStore::new(state_dir);
     let asset_root = FilePath::new(UI_DIST_DIR);
 
     for stream in listener.incoming() {
@@ -209,7 +209,7 @@ mod tests {
     use cid_pal::pal::PalHandle;
     use cid_pal::pal_mock::PalMock;
 
-    use cid_daemon::{BranchRule, Pipeline, PipelineStep, Repository, Run, RunStep};
+    use cid_daemon::{BranchRule, DaemonState, Pipeline, PipelineStep, Repository, Run, RunStep};
 
     use super::{
         CidStateStore, asset_response, content_type_for_path, request_path, resolve_asset_path,
@@ -278,8 +278,8 @@ mod tests {
         );
     }
 
-    fn sample_store(pal: &PalMock) -> CidStateStore {
-        let store = CidStateStore::new(FilePath::new(".cid"), PalHandle::new(pal.clone()));
+    fn sample_store(_pal: &PalMock) -> CidStateStore {
+        let store = CidStateStore::new(FilePath::new(temp_state_dir("web-store")));
         let repository = Repository::new(
             1,
             "cid",
@@ -301,14 +301,20 @@ mod tests {
             100,
             vec![RunStep::new("test", "cargo test", "rust:1.85", Vec::new())],
         );
-        let state_yaml = serde_yaml::to_string(&serde_json::json!({
-            "repositories": [repository],
-            "discovered_commits": [],
-            "runs": [run],
-        }))
-        .unwrap();
-        pal.set_file(".cid/state.yaml", state_yaml);
+        let state = DaemonState::new(vec![repository], Vec::new(), vec![run]);
+        store.save(&state).unwrap();
 
         store
+    }
+
+    fn temp_state_dir(prefix: &str) -> String {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!("cid-{prefix}-{unique}"))
+            .to_string_lossy()
+            .to_string()
     }
 }

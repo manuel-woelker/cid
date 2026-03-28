@@ -80,7 +80,9 @@ impl DockerRunner {
                         log_output.push_str(&String::from_utf8_lossy(&sink.stderr));
                     }
 
-                    let log_path = self.store.write_step_log(run_id, step_index, &log_output)?;
+                    let log_path =
+                        self.store
+                            .write_step_log(repository, run_id, step_index, &log_output)?;
                     let status = if output.exit_code == Some(0) {
                         RunStatus::Passed
                     } else {
@@ -115,7 +117,9 @@ impl DockerRunner {
                         "failed to start docker for step `{step_name}`: {}",
                         error.to_test_string()
                     );
-                    let log_path = self.store.write_step_log(run_id, step_index, &message)?;
+                    let log_path = self
+                        .store
+                        .write_step_log(repository, run_id, step_index, &message)?;
                     run.steps_mut()[step_index].mark_finished(
                         finished_at_ms,
                         RunStatus::Failed,
@@ -204,6 +208,8 @@ impl ProcessEventSink for OutputCollector {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use cid_base::file_path::FilePath;
     use cid_base::timestamp::Timestamp;
     use cid_pal::pal::PalHandle;
@@ -225,7 +231,7 @@ mod tests {
     fn docker_command_uses_workspace_mount_and_shell_execution() {
         let pal = PalMock::new();
         let runner = DockerRunner::new(
-            CidStateStore::new(FilePath::new("/tmp/cid-state"), PalHandle::new(pal.clone())),
+            CidStateStore::new(FilePath::new("/tmp/cid-state")),
             PalHandle::new(pal),
         );
 
@@ -307,9 +313,10 @@ mod tests {
             100,
             vec![RunStep::new("test", "cargo test", "rust:1.85", Vec::new())],
         )];
+        let state_dir = temp_state_dir("runner-state");
 
         let runner = DockerRunner::new(
-            CidStateStore::new(FilePath::new("state"), PalHandle::new(pal.clone())),
+            CidStateStore::new(state_dir.clone()),
             PalHandle::new(pal.clone()),
         );
         let executed = runner
@@ -318,10 +325,20 @@ mod tests {
 
         assert_eq!(executed, 1);
         assert_eq!(runs[0].status(), RunStatus::Passed);
-        assert_eq!(
-            pal.read_file_string("state/logs/run-1/step-0.log")
-                .as_deref(),
-            Some("ok\n")
-        );
+        let log_path = runs[0].steps()[0].log_path().unwrap();
+        assert_eq!(std::fs::read_to_string(log_path.as_path()).unwrap(), "ok\n");
+        cleanup(&state_dir);
+    }
+
+    fn temp_state_dir(prefix: &str) -> FilePath {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        FilePath::new(std::env::temp_dir().join(format!("cid-{prefix}-{unique}")))
+    }
+
+    fn cleanup(path: &FilePath) {
+        let _ = std::fs::remove_dir_all(path.as_path());
     }
 }
