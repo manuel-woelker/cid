@@ -6,10 +6,23 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: {
-          antd: ["antd"],
-          router: ["@tanstack/react-router"],
-          react: ["react", "react-dom"],
+        manualChunks(id) {
+          if (id.includes("node_modules/antd/")) {
+            return "antd";
+          }
+
+          if (id.includes("node_modules/@tanstack/react-router/")) {
+            return "router";
+          }
+
+          if (
+            id.includes("node_modules/react/") ||
+            id.includes("node_modules/react-dom/")
+          ) {
+            return "react";
+          }
+
+          return undefined;
         },
       },
     },
@@ -22,10 +35,5 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
-  },
-  test: {
-    environment: "jsdom",
-    setupFiles: "./src/test/setup.ts",
-    css: true,
   },
 });

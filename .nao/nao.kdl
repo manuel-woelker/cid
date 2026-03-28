@@ -40,7 +40,31 @@ recipe "default" {
     """
   }
 
+  task "ui-format" description="Format UI files with oxfmt" {
+    run shell="""
+      pnpm --dir ui format
+      NAO_TASK_OUTCOME="UI files were formatted"
+    """
+  }
+
+  task "ui-lint" description="Lint the UI with oxlint" {
+    depends-on "ui-format"
+    run shell="""
+      pnpm --dir ui lint
+      NAO_TASK_OUTCOME="UI lint passed"
+    """
+  }
+
+  task "ui-typecheck" description="Typecheck the UI application source" {
+    depends-on "ui-format"
+    run shell="""
+      pnpm --dir ui typecheck
+      NAO_TASK_OUTCOME="UI typecheck passed"
+    """
+  }
+
   task "ui-test" description="Run the UI test suite" {
+    depends-on "ui-format"
     run shell="""
       pnpm --dir ui test:run
       NAO_TASK_OUTCOME="UI tests passed"
@@ -48,6 +72,7 @@ recipe "default" {
   }
 
   task "ui-build" description="Build the UI bundle" {
+    depends-on "ui-format"
     run shell="""
       pnpm --dir ui build
       NAO_TASK_OUTCOME="UI production build succeeded"
@@ -59,6 +84,9 @@ recipe "default" {
     depends-on "fmt"
     depends-on "clippy"
     depends-on "test"
+    depends-on "ui-format"
+    depends-on "ui-lint"
+    depends-on "ui-typecheck"
     depends-on "ui-test"
     depends-on "ui-build"
     run shell="""
