@@ -20,6 +20,20 @@ async function requestJson<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function requestText(path: string): Promise<string> {
+  const response = await fetch(path, {
+    headers: {
+      Accept: "text/plain",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`request failed for ${path}: ${response.status}`);
+  }
+
+  return response.text();
+}
+
 export async function getRepositories(): Promise<Repository[]> {
   return requestJson<Repository[]>("/api/repositories");
 }
@@ -51,6 +65,13 @@ export async function getRuns(): Promise<Run[]> {
 
 export async function getRun(runId: string): Promise<Run> {
   return requestJson<Run>(`/api/runs/${runId}`);
+}
+
+export async function getRunStepLog(
+  runId: string,
+  stepIndex: number,
+): Promise<string> {
+  return requestText(`/api/runs/${runId}/steps/${stepIndex}/log`);
 }
 
 export async function getSummary(): Promise<Summary> {

@@ -1,6 +1,7 @@
 mod asset_source;
 mod embedded_assets;
 
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
@@ -88,6 +89,15 @@ fn route_request(
             Some(run) => json_response(run),
             None => Ok(text_response("404 Not Found", "run not found")),
         },
+        ["api", "runs", run_id, "steps", step_index, "log"] => {
+            match find_run(&state, run_id.parse::<u64>().ok()) {
+                Some(run) => match step_log_response(run, step_index.parse::<usize>().ok())? {
+                    Some(response) => Ok(response),
+                    None => Ok(text_response("404 Not Found", "step log not found")),
+                },
+                None => Ok(text_response("404 Not Found", "run not found")),
+            }
+        }
         ["api", "summary"] => json_response(&RunSummary::from_runs(state.runs())),
         _ => Ok(text_response("404 Not Found", "not found")),
     }
@@ -110,6 +120,10 @@ fn text_response(status: &'static str, body: &str) -> HttpResponse {
         "text/plain; charset=utf-8",
         body.as_bytes().to_vec(),
     )
+}
+
+fn text_file_response(body: String) -> HttpResponse {
+    HttpResponse::new("200 OK", "text/plain; charset=utf-8", body.into_bytes())
 }
 
 fn asset_response(path: &str, asset_source: &AssetSource) -> CidResult<HttpResponse> {
@@ -316,6 +330,24 @@ fn decode_hex_nibble(byte: u8) -> CidResult<u8> {
         b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err(cid_base::err!("invalid percent-encoded path segment")),
     }
+}
+
+fn step_log_response(run: &Run, step_index: Option<usize>) -> CidResult<Option<HttpResponse>> {
+    let step_index = match step_index {
+        Some(step_index) => step_index,
+        None => return Ok(None),
+    };
+
+    let Some(step) = run.steps().get(step_index) else {
+        return Ok(None);
+    };
+    let Some(log_path) = step.log_path() else {
+        return Ok(None);
+    };
+
+    let log_contents = fs::read_to_string(log_path.as_path())
+        .with_context(|| format!("failed to read step log `{log_path}`"))?;
+    Ok(Some(text_file_response(log_contents)))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -526,6 +558,22 @@ mod tests {
         assert!(body.contains("\"run_count\": 0"));
     }
 
+    #[test]
+    fn route_request_returns_step_log_contents() {
+        let pal = PalMock::new();
+        let store = sample_store(&pal);
+        let response = route_request(
+            "/api/runs/3/steps/0/log",
+            &store,
+            &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "200 OK");
+        assert_eq!(response.content_type, "text/plain; charset=utf-8");
+        assert_eq!(String::from_utf8(response.body).unwrap(), "latest main log");
+    }
+
     fn sample_store(_pal: &PalMock) -> CidStateStore {
         let store = CidStateStore::new(FilePath::new(temp_state_dir("web-store")));
         let repository = Repository::new(
@@ -544,9 +592,39 @@ mod tests {
             ),
         );
 
-        let run = sample_run(1, "main", "abc123", "queued", 100, None, None);
-        let newer_run = sample_run(2, "release", "def456", "failed", 90, Some(110), Some(120));
-        let latest_run = sample_run(3, "main", "fedcba", "passed", 130, Some(140), Some(150));
+        let latest_log_path = store
+            .write_step_log(&repository, 3, 0, "latest main log")
+            .unwrap();
+        let run = sample_run(SampleRun {
+            id: 1,
+            branch: "main",
+            commit_sha: "abc123",
+            status: "queued",
+            queued_at_ms: 100,
+            started_at_ms: None,
+            finished_at_ms: None,
+            log_path: None,
+        });
+        let newer_run = sample_run(SampleRun {
+            id: 2,
+            branch: "release",
+            commit_sha: "def456",
+            status: "failed",
+            queued_at_ms: 90,
+            started_at_ms: Some(110),
+            finished_at_ms: Some(120),
+            log_path: None,
+        });
+        let latest_run = sample_run(SampleRun {
+            id: 3,
+            branch: "main",
+            commit_sha: "fedcba",
+            status: "passed",
+            queued_at_ms: 130,
+            started_at_ms: Some(140),
+            finished_at_ms: Some(150),
+            log_path: Some(latest_log_path.as_str()),
+        });
 
         let state = DaemonState::new(
             vec![repository],
@@ -558,36 +636,42 @@ mod tests {
         store
     }
 
-    fn sample_run(
+    struct SampleRun<'a> {
         id: u64,
-        branch: &str,
-        commit_sha: &str,
-        status: &str,
+        branch: &'a str,
+        commit_sha: &'a str,
+        status: &'a str,
         queued_at_ms: u64,
         started_at_ms: Option<u64>,
         finished_at_ms: Option<u64>,
-    ) -> Run {
+        log_path: Option<&'a str>,
+    }
+
+    fn sample_run(sample: SampleRun<'_>) -> Run {
         serde_json::from_value(serde_json::json!({
-            "id": id,
+            "id": sample.id,
             "repository_id": 1,
             "repository_name": "cid",
-            "branch": branch,
-            "commit_sha": commit_sha,
-            "status": status,
-            "queued_at_ms": queued_at_ms,
-            "started_at_ms": started_at_ms,
-            "finished_at_ms": finished_at_ms,
+            "branch": sample.branch,
+            "commit_sha": sample.commit_sha,
+            "status": sample.status,
+            "queued_at_ms": sample.queued_at_ms,
+            "started_at_ms": sample.started_at_ms,
+            "finished_at_ms": sample.finished_at_ms,
             "steps": [
                 {
                     "name": "test",
                     "command": "cargo test",
                     "image": "rust:1.85",
-                    "status": status,
+                    "status": sample.status,
                     "exit_code": null,
-                    "started_at_ms": started_at_ms,
-                    "finished_at_ms": finished_at_ms,
-                    "duration_ms": finished_at_ms.zip(started_at_ms).map(|(finished, started)| finished - started),
-                    "log_path": null,
+                    "started_at_ms": sample.started_at_ms,
+                    "finished_at_ms": sample.finished_at_ms,
+                    "duration_ms": sample
+                        .finished_at_ms
+                        .zip(sample.started_at_ms)
+                        .map(|(finished, started)| finished - started),
+                    "log_path": sample.log_path,
                     "artifact_paths": [],
                 }
             ],

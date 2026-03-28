@@ -12,7 +12,7 @@ import {
 } from "antd";
 import { useParams } from "@tanstack/react-router";
 
-import { getRun } from "../../lib/api/client";
+import { getRun, getRunStepLog } from "../../lib/api/client";
 import type { Run } from "../../lib/api/types";
 import { statusColor } from "../../lib/run-status";
 import { formatDuration, formatTimestamp, shortCommit } from "../../lib/time";
@@ -22,6 +22,10 @@ export function RunDetailPage() {
     from: "/repositories/$repositoryId/runs/$runId",
   });
   const [run, setRun] = useState<Run | null>(null);
+  const [stepLogs, setStepLogs] = useState<Record<number, string>>({});
+  const [stepLogErrors, setStepLogErrors] = useState<Record<number, string>>(
+    {},
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,6 +40,8 @@ export function RunDetailPage() {
         const nextRun = await getRun(runId);
         if (isMounted) {
           setRun(nextRun);
+          setStepLogs({});
+          setStepLogErrors({});
         }
       } catch (loadError) {
         if (!isMounted) {
@@ -58,6 +64,64 @@ export function RunDetailPage() {
       isMounted = false;
     };
   }, [runId]);
+
+  useEffect(() => {
+    if (!run) {
+      return;
+    }
+
+    const currentRun = run;
+    let isMounted = true;
+
+    async function loadStepLogs() {
+      const stepsWithLogs = currentRun.steps
+        .map((step, stepIndex) => ({ step, stepIndex }))
+        .filter(({ step }) => step.log_path !== null);
+
+      const results = await Promise.all(
+        stepsWithLogs.map(async ({ stepIndex }) => {
+          try {
+            const contents = await getRunStepLog(runId, stepIndex);
+            return { stepIndex, contents, error: null as string | null };
+          } catch (loadError) {
+            return {
+              stepIndex,
+              contents: null as string | null,
+              error:
+                loadError instanceof Error
+                  ? loadError.message
+                  : "Unknown error",
+            };
+          }
+        }),
+      );
+
+      if (!isMounted) {
+        return;
+      }
+
+      const nextStepLogs: Record<number, string> = {};
+      const nextStepLogErrors: Record<number, string> = {};
+
+      for (const result of results) {
+        if (result.contents !== null) {
+          nextStepLogs[result.stepIndex] = result.contents;
+        }
+        if (result.error !== null) {
+          nextStepLogErrors[result.stepIndex] = result.error;
+        }
+      }
+
+      setStepLogs(nextStepLogs);
+      setStepLogErrors(nextStepLogErrors);
+    }
+
+    void loadStepLogs();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [run, runId]);
 
   if (error) {
     return (
@@ -135,7 +199,7 @@ export function RunDetailPage() {
       <Card title="Step details" loading={isLoading}>
         {run ? (
           <Space direction="vertical" size="middle" className="page-stack">
-            {run.steps.map((step) => (
+            {run.steps.map((step, index) => (
               <Card key={step.name} size="small">
                 <Descriptions bordered column={1} size="small">
                   <Descriptions.Item label="Status">
@@ -161,6 +225,22 @@ export function RunDetailPage() {
                     )}
                   </Descriptions.Item>
                 </Descriptions>
+                {stepLogs[index] ? (
+                  <div>
+                    <Typography.Paragraph className="compact-paragraph">
+                      Step log
+                    </Typography.Paragraph>
+                    <pre>{stepLogs[index]}</pre>
+                  </div>
+                ) : null}
+                {stepLogErrors[index] ? (
+                  <Alert
+                    className="inline-alert"
+                    type="warning"
+                    showIcon
+                    message={stepLogErrors[index]}
+                  />
+                ) : null}
               </Card>
             ))}
           </Space>
