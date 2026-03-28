@@ -18,7 +18,7 @@ Most CI systems are remote-first:
 
 `cid` flips that model around.
 
-It runs next to your repos, notices new commits immediately, executes your pipeline locally in isolated Docker images, and gives you a clean dashboard for build status, failures, trends, and repo health.
+It runs next to your repos, notices new commits immediately, executes repository-defined pipelines locally in isolated Docker images, and gives you a clean dashboard for build status, failures, trends, and repo health.
 
 That makes it useful for:
 
@@ -42,7 +42,7 @@ In practice, that means:
 
 - you register one or more local repos with `cid`
 - `cid` watches their Git state
-- when a new commit appears on a tracked branch, it creates a build
+- when a new commit appears on a tracked ref, it creates a build
 - the build runs inside a configured container image
 - logs, artifacts, exit status, and timing data are stored locally
 - the web UI shows current status and historical statistics
@@ -52,7 +52,7 @@ In practice, that means:
 - Local-first CI for Git repositories on your machine
 - Automatic detection of new commits
 - Docker-based isolated build environments
-- Per-repository pipeline configuration
+- Repository-defined pipeline configuration
 - Build logs and structured reports
 - Commit-level history and status tracking
 - Web dashboard with recent runs and failure summaries
@@ -87,34 +87,15 @@ Then the web UI shows:
 
 ## Configuration sketch
 
-One possible repo config could look like this:
+The daemon-level config should stay small:
 
 ```yaml
-repo:
-  name: cid
-  path: /home/user/src/cid
-  branches:
-    - main
-    - feature/*
-
-pipeline:
-  image: rust:1.88
-  workdir: /workspace
-  steps:
-    - name: fmt
-      run: cargo fmt --check
-    - name: lint
-      run: cargo clippy --all-targets --all-features -- -D warnings
-    - name: test
-      run: cargo test --all
-
-artifacts:
-  paths:
-    - target/nextest
-    - coverage/
+repositories:
+  - path: /home/user/src/cid
+  - path: /home/user/src/other-repo
 ```
 
-The exact config format is still open, but the shape should stay boring and predictable.
+Repository-specific ref selection and pipeline configuration should live in the upstream repository rather than in `cid-config.yaml`.
 
 ## Web UI
 
@@ -131,7 +112,7 @@ Useful views:
 - repository overview
 - recent runs
 - run detail with step logs
-- branch health
+- ref health
 - commit history
 - duration and success-rate charts
 - top failing steps across time
@@ -189,7 +170,7 @@ local git repos
 
 Likely data to persist:
 
-- repositories and watched branches
+- repositories
 - detected commits
 - run metadata
 - step results
@@ -202,7 +183,7 @@ The default persistence model should be hybrid:
 - SQLite for structured state like repositories, commits, runs, step metadata, and statistics
 - filesystem-backed storage for per-step logs and retained artifacts
 
-That keeps dashboard queries cheap without stuffing large append-only logs into the database.
+For the concrete on-disk layout and intended database split, see [docs/PERSISTENCE.md](/data/projects/cid/docs/PERSISTENCE.md).
 
 ## Future ideas
 

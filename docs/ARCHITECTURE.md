@@ -71,23 +71,24 @@ It should store:
 
 - repository name
 - local filesystem path
-- watched branches or branch patterns
-- pipeline configuration
 - repository status metadata
 
 The registry should stay boring.
 If adding or updating a repository feels complicated, the product is already drifting.
 
+Repository-specific refs and pipeline configuration should not live in the central registry.
+That data should come from the upstream repository itself and be cached per repository when needed.
+
 # What is the responsibility of the Git watcher?
 
-The Git watcher observes registered repositories and detects when tracked branches advance to a new commit.
+The Git watcher observes registered repositories and detects when tracked refs advance to a new commit.
 
 Its job is not to run builds directly.
 Its job is to emit events like:
 
 - repository added
 - repository unavailable
-- branch advanced
+- ref advanced
 - commit discovered
 
 The watcher should be resilient to normal local-machine mess:
@@ -169,21 +170,13 @@ The default persistence model should be hybrid:
 - SQLite for structured state
 - the filesystem for logs and retained artifacts
 
-SQLite is the best fit for data that needs querying, deduplication, and transactional updates, such as:
+The concrete layout and recommended table structure live in [PERSISTENCE.md](/data/projects/cid/docs/PERSISTENCE.md).
 
-- repositories
-- branch rules
-- discovered commits
-- runs
-- run steps
-- statuses and timestamps
-- lightweight aggregate statistics
+At a high level:
 
-The filesystem is the better fit for append-heavy or larger opaque outputs, such as:
-
-- per-step logs
-- exported reports
-- retained artifacts
+- `.cid/cid.db` stores only the repository registry
+- `.cid/repositories/<repository-key>/cid-repo.db` stores repository-local execution history and repository-derived execution config
+- repository-local `runs/` directories store logs and artifacts
 
 This split keeps the storage model practical.
 Trying to force logs and artifacts into the database from day one would add complexity without making the product better.

@@ -1,7 +1,7 @@
 # What is `cid`?
 
 `cid` is a local-first continuous integration daemon.
-It watches local Git repositories, detects new commits, runs configured build pipelines in Docker images, and stores the results locally for inspection through a web UI.
+It watches local Git repositories, detects new commits, runs repository-defined build pipelines in Docker images, and stores the results locally for inspection through a web UI.
 
 This document is intentionally high level.
 It describes the current direction of the project rather than a frozen implementation contract.
@@ -39,7 +39,7 @@ At a high level, `cid` has four responsibilities:
 - retain logs, reports, and aggregate statistics for later inspection
 
 The daemon should stay running in the background.
-When a watched branch advances, it should enqueue a build automatically instead of waiting for a manual command.
+When a tracked ref advances, it should enqueue a build automatically instead of waiting for a manual command.
 
 # Why use Docker-based execution?
 
@@ -67,7 +67,7 @@ It should be useful as an operations surface for local development workflows.
 
 `cid` should persist enough local state to make runs inspectable and trends useful:
 
-- watched repositories and branch rules
+- watched repositories
 - detected commits
 - queued, running, passed, and failed runs
 - per-step logs and outcomes
@@ -83,10 +83,15 @@ The default persistence approach should be hybrid:
 - SQLite for structured state
 - the filesystem for logs and retained artifacts
 
-SQLite is the right fit for repositories, commits, runs, step metadata, statuses, timestamps, and summary statistics.
-The filesystem is the right fit for per-step logs and retained artifact files.
+The concrete on-disk layout and recommended database tables live in [PERSISTENCE.md](/data/projects/cid/docs/PERSISTENCE.md).
 
-That gives `cid` cheap local queries for the dashboard without turning the database into a dumpster for large append-only output.
+In short:
+
+- `.cid/cid.db` stores only the repository registry
+- `.cid/repositories/<repository-key>/cid-repo.db` stores repository-local run history and repository-derived execution config
+- repository-local directories store workspaces, caches, logs, and artifacts
+
+That gives `cid` cheap local queries for the dashboard without turning SQLite into a dumpster for large append-only output.
 
 # What should the first version optimize for?
 

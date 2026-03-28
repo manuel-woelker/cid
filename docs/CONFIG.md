@@ -5,6 +5,7 @@ It focuses on configuring which local Git repositories the daemon should manage.
 
 This is not the per-repository pipeline format.
 It is the daemon’s own configuration for which repositories exist in its local world.
+Repository-specific refs and pipeline configuration should live in the upstream repository, not in `cid-config.yaml`.
 
 # What should the daemon config file be called?
 
@@ -22,7 +23,7 @@ The first version should configure only one thing:
 
 - the list of repositories the daemon should watch
 
-That is enough to get the daemon off the ground without smuggling pipeline logic, scheduling rules, and half a CI DSL into one file.
+That is enough to get the daemon off the ground without smuggling branch rules, pipeline logic, scheduling rules, and half a CI DSL into one file.
 
 # What should the first version look like?
 
@@ -75,18 +76,8 @@ That means:
 The list-item object shape is intentional.
 It gives the config room to grow without changing the top-level structure.
 
-For example, a later version could extend entries like this:
-
-```yaml
-repositories:
-  - path: /home/user/foo
-    enabled: true
-    branch_patterns:
-      - main
-      - feature/*
-```
-
-That is cleaner than starting with a list of raw strings and then needing a breaking format change later.
+If this file grows later, it should still stay daemon-focused.
+Repository execution policy belongs with the repository, not in a central daemon config file.
 
 # What should stay out of this file?
 
@@ -94,6 +85,7 @@ This daemon config should stay focused on daemon concerns.
 
 At least initially, do not put these things in `cid-config.yaml`:
 
+- branch selection rules for a repository
 - pipeline step definitions
 - Docker image commands for builds
 - artifact declarations
