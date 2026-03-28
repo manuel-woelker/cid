@@ -1,0 +1,143 @@
+:root {
+  color: #1f2937;
+  background:
+    radial-gradient(circle at top left, rgba(15, 118, 110, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(217, 119, 6, 0.16), transparent 24%),
+    linear-gradient(180deg, #f4efe6 0%, #efe7db 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  color: #1f2937;
+  background: transparent;
+}
+
+a {
+  color: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-layout {
+  min-height: 100vh;
+  background: transparent;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: auto;
+  padding: 20px 24px;
+  background: rgba(255, 251, 245, 0.82);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.app-brand h3.ant-typography {
+  margin: 0;
+}
+
+.app-brand .ant-typography {
+  display: block;
+}
+
+.app-nav-link {
+  padding: 10px 14px;
+  border-radius: 999px;
+  text-decoration: none;
+  color: #475569;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.app-nav-link:hover,
+.app-nav-link-active {
+  color: #0f172a;
+  background: rgba(15, 118, 110, 0.14);
+}
+
+.app-content {
+  width: min(1200px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 32px 0 48px;
+}
+
+.page-stack {
+  width: 100%;
+}
+
+.page-hero {
+  padding: 8px 8px 0;
+}
+
+.page-hero h1.ant-typography {
+  max-width: 12ch;
+  margin-bottom: 8px;
+  font-size: clamp(2.25rem, 4vw, 4rem);
+  line-height: 0.96;
+}
+
+.page-hero .ant-typography {
+  max-width: 56ch;
+  margin-bottom: 0;
+  color: #475569;
+}
+
+.stat-card,
+.repository-card,
+.ant-card {
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.07);
+}
+
+.repository-list {
+  width: 100%;
+}
+
+.muted-text {
+  color: #64748b;
+}
+
+.compact-paragraph {
+  margin: 12px 0 0;
+}
+
+.inline-alert {
+  margin-top: 12px;
+}
+
+.run-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+@media (max-width: 720px) {
+  .app-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .app-content {
+    width: min(100vw - 24px, 1200px);
+    padding-top: 24px;
+  }
+
+  .run-title-row {
+    flex-direction: column;
+  }
+}

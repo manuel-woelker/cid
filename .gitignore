@@ -8,5 +8,7 @@
 !/sandboxes/.gitkeep
 /.cache
 /.cid/
+/ui/node_modules
+/ui/dist
 perf.data*
 flamegraph.svg
