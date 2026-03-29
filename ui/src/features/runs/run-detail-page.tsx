@@ -291,7 +291,9 @@ export function RunDetailPage() {
           ) : selectedStep ? (
             <div className="run-log-body">
               {stepLogs[selectedStepIndex] ? (
-                <pre className="run-log-output">{stepLogs[selectedStepIndex]}</pre>
+                <pre className="run-log-output">
+                  {stepLogs[selectedStepIndex]}
+                </pre>
               ) : stepLogErrors[selectedStepIndex] ? (
                 <Alert
                   type="warning"

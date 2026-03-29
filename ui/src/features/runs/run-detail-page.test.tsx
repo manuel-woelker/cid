@@ -141,7 +141,9 @@ describe("RunDetailPage", () => {
                 artifact_paths: [],
               },
             ],
-            events: [{ timestamp_ms: 1_700_000_002_000, message: "run queued" }],
+            events: [
+              { timestamp_ms: 1_700_000_002_000, message: "run queued" },
+            ],
           }),
         );
       }
@@ -172,7 +174,9 @@ describe("RunDetailPage", () => {
                 artifact_paths: [],
               },
             ],
-            events: [{ timestamp_ms: 1_700_000_002_000, message: "run queued" }],
+            events: [
+              { timestamp_ms: 1_700_000_002_000, message: "run queued" },
+            ],
           }),
         );
       }

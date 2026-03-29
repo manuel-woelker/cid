@@ -42,7 +42,11 @@ export function ReplayRunButton({
   }
 
   return (
-    <Button size={size} loading={isReplaying} onClick={() => void handleReplay()}>
+    <Button
+      size={size}
+      loading={isReplaying}
+      onClick={() => void handleReplay()}
+    >
       Try build again
     </Button>
   );
