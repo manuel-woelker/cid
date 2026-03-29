@@ -394,6 +394,13 @@ a {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+  font-family:
+    "Iosevka Term",
+    "SFMono-Regular",
+    "SF Mono",
+    Consolas,
+    "Liberation Mono",
+    monospace;
 }
 
 @media (max-width: 720px) {

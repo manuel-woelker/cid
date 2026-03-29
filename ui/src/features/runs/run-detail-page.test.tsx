@@ -152,6 +152,69 @@ describe("RunDetailPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders ansi colors and bold styles in log output", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url === "/api/runs/7") {
+        return new Response(
+          JSON.stringify({
+            id: 7,
+            repository_id: 1,
+            repository_name: "cid",
+            branch: "main",
+            commit_sha: "abcdef123456",
+            status: "failed",
+            queued_at_ms: 1_700_000_000_000,
+            started_at_ms: 1_700_000_000_050,
+            finished_at_ms: 1_700_000_001_250,
+            steps: [
+              {
+                name: "ci",
+                command: "./scripts/ci.sh",
+                image: "devcontainer",
+                status: "failed",
+                exit_code: 1,
+                started_at_ms: 1_700_000_000_050,
+                finished_at_ms: 1_700_000_001_250,
+                duration_ms: 1200,
+                log_path: ".cid/repositories/cid/runs/run-7/step-0.log",
+                artifact_paths: [],
+              },
+            ],
+            events: [],
+          }),
+        );
+      }
+
+      if (url === "/api/runs/7/steps/0/log") {
+        return new Response(
+          "\u001b[1;31mFAIL\u001b[0m plain \u001b[38;2;12;34;56mcustom\u001b[0m",
+        );
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    await renderApp("/repositories/1/runs/7");
+
+    await waitFor(() =>
+      expect(screen.getByText("Run #7 · cid")).toBeInTheDocument(),
+    );
+
+    const failText = await screen.findByText("FAIL", { selector: "span" });
+    const customText = screen.getByText("custom", { selector: "span" });
+
+    expect(failText.getAttribute("style")).toContain("font-weight: 700");
+    expect(failText.getAttribute("style")).toContain(
+      "color: rgb(248, 113, 113)",
+    );
+    expect(customText.getAttribute("style")).toContain(
+      "color: rgb(12, 34, 56)",
+    );
+    expect(screen.getByText(/plain/)).toBeInTheDocument();
+  });
+
   it("replays the run and navigates to the new queued run", async () => {
     fetchMock.mockImplementation(async (input, init) => {
       const url = String(input);

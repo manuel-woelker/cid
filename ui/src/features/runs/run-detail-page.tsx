@@ -17,6 +17,7 @@ import { getRun, getRunStepLog } from "../../lib/api/client";
 import type { Run } from "../../lib/api/types";
 import { statusColor } from "../../lib/run-status";
 import { formatDuration, formatTimestamp, shortCommit } from "../../lib/time";
+import { AnsiLogOutput } from "./ansi-log-output";
 import { ReplayRunButton } from "./replay-run-button";
 
 function findLastStepWithLog(run: Run): number {
@@ -299,7 +300,7 @@ export function RunDetailPage() {
             <div className="run-log-body">
               {stepLogs[selectedStepIndex] ? (
                 <pre className="run-log-output">
-                  {stepLogs[selectedStepIndex]}
+                  <AnsiLogOutput text={stepLogs[selectedStepIndex]} />
                 </pre>
               ) : stepLogErrors[selectedStepIndex] ? (
                 <Alert
