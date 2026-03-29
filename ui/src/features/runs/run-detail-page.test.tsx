@@ -76,6 +76,82 @@ describe("RunDetailPage", () => {
     expect(screen.getAllByText("failed").length).toBeGreaterThan(0);
   });
 
+  it("defaults log output to the last step with a log", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url === "/api/runs/7") {
+        return new Response(
+          JSON.stringify({
+            id: 7,
+            repository_id: 1,
+            repository_name: "cid",
+            branch: "main",
+            commit_sha: "abcdef123456",
+            status: "passed",
+            queued_at_ms: 1_700_000_000_000,
+            started_at_ms: 1_700_000_000_050,
+            finished_at_ms: 1_700_000_001_250,
+            steps: [
+              {
+                name: "build devcontainer",
+                command: "devcontainer build --workspace-folder .",
+                image: "devcontainer",
+                status: "passed",
+                exit_code: 0,
+                started_at_ms: 1_700_000_000_050,
+                finished_at_ms: 1_700_000_000_450,
+                duration_ms: 400,
+                log_path: ".cid/repositories/cid/runs/run-7/step-0.log",
+                artifact_paths: [],
+              },
+              {
+                name: "run ci script",
+                command: "./scripts/ci.sh",
+                image: "devcontainer",
+                status: "passed",
+                exit_code: 0,
+                started_at_ms: 1_700_000_000_500,
+                finished_at_ms: 1_700_000_001_250,
+                duration_ms: 750,
+                log_path: ".cid/repositories/cid/runs/run-7/step-1.log",
+                artifact_paths: [],
+              },
+            ],
+            events: [
+              { timestamp_ms: 1_700_000_000_000, message: "run queued" },
+              {
+                timestamp_ms: 1_700_000_001_250,
+                message: "run finished with status passed",
+              },
+            ],
+          }),
+        );
+      }
+
+      if (url === "/api/runs/7/steps/0/log") {
+        return new Response("devcontainer build output");
+      }
+
+      if (url === "/api/runs/7/steps/1/log") {
+        return new Response("ci script output");
+      }
+
+      return new Response("not found", { status: 404 });
+    });
+
+    await renderApp("/repositories/1/runs/7");
+
+    await waitFor(() =>
+      expect(screen.getByText("Run #7 · cid")).toBeInTheDocument(),
+    );
+
+    expect(await screen.findByText("ci script output")).toBeInTheDocument();
+    expect(
+      screen.queryByText("devcontainer build output"),
+    ).not.toBeInTheDocument();
+  });
+
   it("replays the run and navigates to the new queued run", async () => {
     fetchMock.mockImplementation(async (input, init) => {
       const url = String(input);

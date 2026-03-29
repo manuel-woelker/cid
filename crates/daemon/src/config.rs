@@ -260,10 +260,7 @@ mod tests {
         assert_eq!(repositories.len(), 1);
         assert_eq!(repositories[0].name(), "foo");
         assert_eq!(repositories[0].pipeline().image(), "devcontainer");
-        assert_eq!(
-            repositories[0].pipeline().steps()[0].name(),
-            "build devcontainer"
-        );
+        assert_eq!(repositories[0].pipeline().steps()[0].name(), "ci");
     }
 
     #[test]

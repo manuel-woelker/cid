@@ -113,13 +113,7 @@ impl Pipeline {
     pub fn for_devcontainer(artifact_paths: Vec<FilePath>) -> Self {
         Self {
             image: "devcontainer".into(),
-            steps: vec![
-                PipelineStep::new(
-                    "build devcontainer",
-                    "devcontainer build --workspace-folder .",
-                ),
-                PipelineStep::new("run ci script", "./scripts/ci.sh"),
-            ],
+            steps: vec![PipelineStep::new("ci", "./scripts/ci.sh")],
             artifact_paths,
         }
     }
@@ -247,9 +241,9 @@ mod tests {
         let pipeline = Pipeline::for_devcontainer(vec![FilePath::new("target/nextest")]);
 
         assert_eq!(pipeline.image(), "devcontainer");
-        assert_eq!(pipeline.steps().len(), 2);
-        assert_eq!(pipeline.steps()[0].name(), "build devcontainer");
-        assert_eq!(pipeline.steps()[1].command(), "./scripts/ci.sh");
+        assert_eq!(pipeline.steps().len(), 1);
+        assert_eq!(pipeline.steps()[0].name(), "ci");
+        assert_eq!(pipeline.steps()[0].command(), "./scripts/ci.sh");
         assert_eq!(pipeline.artifact_paths()[0].as_str(), "target/nextest");
     }
 }

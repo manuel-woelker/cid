@@ -19,6 +19,16 @@ import { statusColor } from "../../lib/run-status";
 import { formatDuration, formatTimestamp, shortCommit } from "../../lib/time";
 import { ReplayRunButton } from "./replay-run-button";
 
+function findLastStepWithLog(run: Run): number {
+  for (let index = run.steps.length - 1; index >= 0; index -= 1) {
+    if (run.steps[index]?.log_path !== null) {
+      return index;
+    }
+  }
+
+  return 0;
+}
+
 export function RunDetailPage() {
   const { repositoryId, runId } = useParams({
     from: "/repositories/$repositoryId/runs/$runId",
@@ -43,10 +53,7 @@ export function RunDetailPage() {
         const nextRun = await getRun(runId);
         if (isMounted) {
           setRun(nextRun);
-          const firstStepWithLog = nextRun.steps.findIndex(
-            (step) => step.log_path !== null,
-          );
-          setSelectedStepIndex(firstStepWithLog >= 0 ? firstStepWithLog : 0);
+          setSelectedStepIndex(findLastStepWithLog(nextRun));
           setStepLogs({});
           setStepLogErrors({});
         }

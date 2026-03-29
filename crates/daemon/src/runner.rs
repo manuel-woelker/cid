@@ -71,28 +71,51 @@ impl DockerRunner {
         for step_index in 0..run.steps().len() {
             let step = &run.steps()[step_index];
             let step_name = step.name().to_string();
-            let command = self.build_command(
-                &repository_path,
-                repository,
-                step_name.as_str(),
-                &fingerprint,
-                &image_tag,
-            )?;
-            let mut sink = OutputCollector::default();
-            let output = self.pal.run_process(&command, &mut sink);
             let started_at_ms = self.now_ms();
             run.steps_mut()[step_index].mark_running(started_at_ms);
+
+            if repository.pipeline().image() == "devcontainer" {
+                if let Some((exit_code, log_output)) = self.ensure_devcontainer_built(
+                    &repository_path,
+                    repository,
+                    &fingerprint,
+                    &image_tag,
+                )? {
+                    let finished_at_ms = self.now_ms();
+                    let log_path =
+                        self.store
+                            .write_step_log(repository, run_id, step_index, &log_output)?;
+                    run.steps_mut()[step_index].mark_finished(
+                        finished_at_ms,
+                        RunStatus::Failed,
+                        exit_code,
+                        Some(log_path),
+                    );
+                    run.push_event(
+                        finished_at_ms,
+                        format!("step `{step_name}` finished with status failed"),
+                    );
+                    info!(
+                        run_id = run.id(),
+                        repository = run.repository_name(),
+                        branch = run.branch(),
+                        commit_sha = run.commit_sha(),
+                        status = %RunStatus::Failed.label(),
+                        "run completed"
+                    );
+                    run.finish(finished_at_ms, RunStatus::Failed);
+                    return Ok(());
+                }
+            }
+
+            let command = self.build_command(&repository_path, step_name.as_str())?;
+            let mut sink = OutputCollector::default();
+            let output = self.pal.run_process(&command, &mut sink);
             let finished_at_ms = self.now_ms();
 
             match output {
                 Ok(output) => {
-                    let mut log_output = String::from_utf8_lossy(&sink.stdout).to_string();
-                    if !sink.stderr.is_empty() {
-                        if !log_output.is_empty() {
-                            log_output.push('\n');
-                        }
-                        log_output.push_str(&String::from_utf8_lossy(&sink.stderr));
-                    }
+                    let log_output = format_process_output(&sink);
 
                     let log_path =
                         self.store
@@ -102,13 +125,6 @@ impl DockerRunner {
                     } else {
                         RunStatus::Failed
                     };
-                    if status == RunStatus::Passed && step_name == "build devcontainer" {
-                        self.write_devcontainer_build_metadata(
-                            repository,
-                            &fingerprint,
-                            &image_tag,
-                        )?;
-                    }
                     run.steps_mut()[step_index].mark_finished(
                         finished_at_ms,
                         status,
@@ -178,61 +194,22 @@ impl DockerRunner {
     pub fn build_command(
         &self,
         repository_path: &cid_base::file_path::FilePath,
-        repository: &Repository,
         step_name: &str,
-        fingerprint: &str,
-        image_tag: &str,
     ) -> CidResult<ProcessCommand> {
-        let metadata = self.read_devcontainer_build_metadata(repository)?;
         let config_path = repository_path
             .join(".devcontainer")
             .join("devcontainer.json");
-        let workspace_folder = repository_path.as_str().to_string();
 
         match step_name {
-            "build devcontainer" => {
-                if metadata
-                    .as_ref()
-                    .is_some_and(|metadata| metadata.fingerprint == fingerprint)
-                {
-                    Ok(ProcessCommand {
-                        executable: "sh".into(),
-                        arguments: vec![
-                            "-lc".into(),
-                            format!(
-                                "printf '%s\\n' 'devcontainer image already up to date: {image_tag}'"
-                            )
-                            .into(),
-                        ],
-                        working_directory: Some(repository_path.clone()),
-                        environment: Vec::new(),
-                    })
-                } else {
-                    Ok(ProcessCommand {
-                        executable: "devcontainer".into(),
-                        arguments: vec![
-                            "build".into(),
-                            "--workspace-folder".into(),
-                            workspace_folder.into(),
-                            "--config".into(),
-                            config_path.as_str().into(),
-                            "--image-name".into(),
-                            image_tag.into(),
-                        ],
-                        working_directory: Some(repository_path.clone()),
-                        environment: Vec::new(),
-                    })
-                }
-            }
-            "run ci script" => Ok(ProcessCommand {
+            "ci" => Ok(ProcessCommand {
                 executable: "sh".into(),
                 arguments: vec![
                     "-lc".into(),
                     format!(
-                        "devcontainer up --workspace-folder '{}' --config '{}' --remove-existing-container >/dev/null && devcontainer exec --workspace-folder '{}' --config '{}' /bin/sh -lc './scripts/ci.sh'",
-                        workspace_folder,
+                        "devcontainer up --workspace-folder '{}' --config '{}' --remove-existing-container >/dev/null 2>&1 && devcontainer exec --workspace-folder '{}' --config '{}' /bin/sh -lc './scripts/ci.sh'",
+                        repository_path.as_str(),
                         config_path,
-                        workspace_folder,
+                        repository_path.as_str(),
                         config_path,
                     )
                     .into(),
@@ -241,6 +218,30 @@ impl DockerRunner {
                 environment: Vec::new(),
             }),
             _ => Err(cid_base::err!("unsupported run step `{step_name}`")),
+        }
+    }
+
+    pub fn build_devcontainer_build_command(
+        &self,
+        repository_path: &cid_base::file_path::FilePath,
+        image_tag: &str,
+    ) -> ProcessCommand {
+        let config_path = repository_path
+            .join(".devcontainer")
+            .join("devcontainer.json");
+        ProcessCommand {
+            executable: "devcontainer".into(),
+            arguments: vec![
+                "build".into(),
+                "--workspace-folder".into(),
+                repository_path.as_str().into(),
+                "--config".into(),
+                config_path.as_str().into(),
+                "--image-name".into(),
+                image_tag.into(),
+            ],
+            working_directory: Some(repository_path.clone()),
+            environment: Vec::new(),
         }
     }
 
@@ -265,6 +266,44 @@ impl DockerRunner {
             ],
             working_directory: Some(repository_path.clone()),
             environment: Vec::new(),
+        }
+    }
+
+    fn ensure_devcontainer_built(
+        &self,
+        repository_path: &cid_base::file_path::FilePath,
+        repository: &Repository,
+        fingerprint: &str,
+        image_tag: &str,
+    ) -> CidResult<Option<(Option<i32>, String)>> {
+        if self
+            .read_devcontainer_build_metadata(repository)?
+            .as_ref()
+            .is_some_and(|metadata| metadata.fingerprint == fingerprint)
+        {
+            return Ok(None);
+        }
+
+        let command = self.build_devcontainer_build_command(repository_path, image_tag);
+        let mut sink = OutputCollector::default();
+        let output = self.pal.run_process(&command, &mut sink);
+
+        match output {
+            Ok(output) => {
+                if output.exit_code == Some(0) {
+                    self.write_devcontainer_build_metadata(repository, fingerprint, image_tag)?;
+                    Ok(None)
+                } else {
+                    Ok(Some((output.exit_code, format_process_output(&sink))))
+                }
+            }
+            Err(error) => Ok(Some((
+                None,
+                format!(
+                    "failed to start devcontainer build: {}",
+                    error.to_test_string()
+                ),
+            ))),
         }
     }
 
@@ -430,6 +469,17 @@ fn slugify(value: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
+fn format_process_output(sink: &OutputCollector) -> String {
+    let mut output = String::from_utf8_lossy(&sink.stdout).to_string();
+    if !sink.stderr.is_empty() {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&String::from_utf8_lossy(&sink.stderr));
+    }
+    output
+}
+
 #[derive(Default)]
 struct OutputCollector {
     stdout: Vec<u8>,
@@ -470,29 +520,43 @@ mod tests {
     use super::{DockerRunner, resolve_repository_path};
 
     #[test]
-    fn build_command_uses_devcontainer_build() {
+    fn build_command_uses_devcontainer_exec_for_ci_step() {
         let pal = PalMock::new();
         let runner = DockerRunner::new(
             CidStateStore::new(FilePath::new("/tmp/cid-state")),
             PalHandle::new(pal),
         );
 
-        let repository = Repository::new(
-            1,
-            "cid",
-            FilePath::new("/repos/cid"),
-            vec![BranchRule::new("main")],
-            Pipeline::for_devcontainer(Vec::new()),
-        );
         let command = runner
-            .build_command(
-                &FilePath::new("/repos/cid"),
-                &repository,
-                "build devcontainer",
-                "abc123",
-                "cid-devcontainer-cid:abc123",
-            )
+            .build_command(&FilePath::new("/repos/cid"), "ci")
             .unwrap();
+
+        assert_eq!(command.executable.as_str(), "sh");
+        assert_eq!(
+            command
+                .arguments
+                .iter()
+                .map(|argument| argument.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "-lc",
+                "devcontainer up --workspace-folder '/repos/cid' --config '/repos/cid/.devcontainer/devcontainer.json' --remove-existing-container >/dev/null 2>&1 && devcontainer exec --workspace-folder '/repos/cid' --config '/repos/cid/.devcontainer/devcontainer.json' /bin/sh -lc './scripts/ci.sh'",
+            ]
+        );
+    }
+
+    #[test]
+    fn build_devcontainer_build_command_uses_devcontainer_build() {
+        let pal = PalMock::new();
+        let runner = DockerRunner::new(
+            CidStateStore::new(FilePath::new("/tmp/cid-state")),
+            PalHandle::new(pal),
+        );
+
+        let command = runner.build_devcontainer_build_command(
+            &FilePath::new("/repos/cid"),
+            "cid-devcontainer-cid:abc123",
+        );
 
         assert_eq!(command.executable.as_str(), "devcontainer");
         assert_eq!(
@@ -514,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn build_command_skips_build_when_fingerprint_matches_cached_metadata() {
+    fn ensure_devcontainer_built_skips_build_when_fingerprint_matches_cached_metadata() {
         let pal = PalMock::new();
         pal.set_file(
             "/tmp/cid-state/devcontainer-cache/cid-sandboxes-cid-rust-sandbox.json",
@@ -535,23 +599,16 @@ mod tests {
             Pipeline::for_devcontainer(Vec::new()),
         );
 
-        let command = runner
-            .build_command(
+        let result = runner
+            .ensure_devcontainer_built(
                 &FilePath::new("sandboxes/cid-rust-sandbox"),
                 &repository,
-                "build devcontainer",
                 "abc123",
                 "cid-devcontainer-cid:abc123",
             )
             .unwrap();
 
-        assert_eq!(command.executable.as_str(), "sh");
-        assert_eq!(command.arguments[0].as_str(), "-lc");
-        assert!(
-            command.arguments[1]
-                .as_str()
-                .contains("devcontainer image already up to date")
-        );
+        assert_eq!(result, None);
     }
 
     #[test]
@@ -645,7 +702,7 @@ mod tests {
                 executable: "sh".into(),
                 arguments: vec![
                     "-lc".into(),
-                    "devcontainer up --workspace-folder '/repos/cid' --config '/repos/cid/.devcontainer/devcontainer.json' --remove-existing-container >/dev/null && devcontainer exec --workspace-folder '/repos/cid' --config '/repos/cid/.devcontainer/devcontainer.json' /bin/sh -lc './scripts/ci.sh'".into(),
+                    "devcontainer up --workspace-folder '/repos/cid' --config '/repos/cid/.devcontainer/devcontainer.json' --remove-existing-container >/dev/null 2>&1 && devcontainer exec --workspace-folder '/repos/cid' --config '/repos/cid/.devcontainer/devcontainer.json' /bin/sh -lc './scripts/ci.sh'".into(),
                 ],
                 working_directory: Some(repository_path.clone()),
                 environment: Vec::new(),
@@ -669,20 +726,12 @@ mod tests {
             "main",
             "abc1234",
             100,
-            vec![
-                RunStep::new(
-                    "build devcontainer",
-                    "devcontainer build --workspace-folder .",
-                    "devcontainer",
-                    Vec::new(),
-                ),
-                RunStep::new(
-                    "run ci script",
-                    "./scripts/ci.sh",
-                    "devcontainer",
-                    Vec::new(),
-                ),
-            ],
+            vec![RunStep::new(
+                "ci",
+                "./scripts/ci.sh",
+                "devcontainer",
+                Vec::new(),
+            )],
         )];
         let executed = runner
             .execute_queued_runs(std::slice::from_ref(&repository), &mut runs)
@@ -690,12 +739,7 @@ mod tests {
 
         assert_eq!(executed, 1);
         assert_eq!(runs[0].status(), RunStatus::Passed);
-        let build_log_path = runs[0].steps()[0].log_path().unwrap();
-        let ci_log_path = runs[0].steps()[1].log_path().unwrap();
-        assert_eq!(
-            std::fs::read_to_string(build_log_path.as_path()).unwrap(),
-            "built\n"
-        );
+        let ci_log_path = runs[0].steps()[0].log_path().unwrap();
         assert_eq!(
             std::fs::read_to_string(ci_log_path.as_path()).unwrap(),
             "ok\n"
