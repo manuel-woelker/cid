@@ -69,8 +69,8 @@ build_release_binary() {
   log "building production web ui"
   pnpm --dir "$ROOT_DIR/ui" build
 
-  log "packing ui/dist into squashfs"
-  mksquashfs "$ROOT_DIR/ui/dist" "$SQUASHFS_IMAGE_PATH" -noappend -quiet -all-root
+  log "packing ui/dist into zstd-compressed squashfs"
+  mksquashfs "$ROOT_DIR/ui/dist" "$SQUASHFS_IMAGE_PATH" -noappend -quiet -all-root -comp zstd
 
   local squashfs_size
   squashfs_size="$(wc -c < "$SQUASHFS_IMAGE_PATH")"

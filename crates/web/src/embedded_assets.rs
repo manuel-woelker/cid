@@ -221,7 +221,7 @@ mod tests {
         let mut filesystem = FilesystemWriter::default();
         filesystem.set_no_padding();
         filesystem
-            .set_compressor(backhand::FilesystemCompressor::new(Compressor::Gzip, None).unwrap());
+            .set_compressor(backhand::FilesystemCompressor::new(Compressor::Zstd, None).unwrap());
         filesystem.set_only_root_id();
         filesystem.set_kind(Kind::from_const(kind::LE_V4_0).unwrap());
         filesystem.set_root_mode(0o755);
