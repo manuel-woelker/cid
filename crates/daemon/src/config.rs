@@ -5,7 +5,7 @@ use cid_base::result::{CidResult, ResultExt};
 use cid_pal::pal::Pal;
 use serde::{Deserialize, Serialize};
 
-use crate::repository::{BranchRule, Pipeline, PipelineStep, Repository};
+use crate::repository::{BranchRule, Pipeline, Repository};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CidConfig {
@@ -33,27 +33,11 @@ struct RepositoryConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct PipelineConfig {
-    #[serde(default = "default_image")]
-    image: String,
-    #[serde(default = "default_steps")]
-    steps: Vec<PipelineStepConfig>,
-    #[serde(default)]
-    artifact_paths: Vec<FilePath>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct PipelineStepConfig {
-    name: String,
-    command: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct UpstreamRepositoryConfig {
     #[serde(default = "default_branches")]
     branches: Vec<String>,
     #[serde(default)]
-    pipeline: PipelineConfig,
+    artifact_paths: Vec<FilePath>,
 }
 
 impl CidConfig {
@@ -120,16 +104,6 @@ impl Default for WebConfig {
     }
 }
 
-impl Default for PipelineConfig {
-    fn default() -> Self {
-        Self {
-            image: default_image(),
-            steps: default_steps(),
-            artifact_paths: Vec::new(),
-        }
-    }
-}
-
 impl RepositoryConfig {
     fn validate(&self, pal: &dyn Pal) -> CidResult<()> {
         if !pal.file_exists(&self.path)? {
@@ -156,6 +130,22 @@ impl RepositoryConfig {
         let upstream = self.load_upstream_config(pal)?;
         upstream.validate(&self.path)?;
 
+        let devcontainer_path = self.devcontainer_config_path();
+        if !pal.file_exists(&devcontainer_path)? {
+            return Err(cid_base::err!(
+                "repository is missing .devcontainer/devcontainer.json: {}",
+                self.path
+            ));
+        }
+
+        let ci_script_path = self.ci_script_path();
+        if !pal.file_exists(&ci_script_path)? {
+            return Err(cid_base::err!(
+                "repository is missing scripts/ci.sh: {}",
+                self.path
+            ));
+        }
+
         Ok(())
     }
 
@@ -172,16 +162,7 @@ impl RepositoryConfig {
             .cloned()
             .map(BranchRule::new)
             .collect();
-        let pipeline = Pipeline::new(
-            upstream.pipeline.image,
-            upstream
-                .pipeline
-                .steps
-                .iter()
-                .map(|step| PipelineStep::new(step.name.clone(), step.command.clone()))
-                .collect(),
-            upstream.pipeline.artifact_paths,
-        );
+        let pipeline = Pipeline::for_devcontainer(upstream.artifact_paths);
 
         Ok(Repository::new(
             id,
@@ -204,6 +185,14 @@ impl RepositoryConfig {
     fn upstream_config_path(&self) -> FilePath {
         self.path.join(".cid").join("cid.yaml")
     }
+
+    fn devcontainer_config_path(&self) -> FilePath {
+        self.path.join(".devcontainer").join("devcontainer.json")
+    }
+
+    fn ci_script_path(&self) -> FilePath {
+        self.path.join("scripts").join("ci.sh")
+    }
 }
 
 impl UpstreamRepositoryConfig {
@@ -211,13 +200,6 @@ impl UpstreamRepositoryConfig {
         if self.branches.is_empty() {
             return Err(cid_base::err!(
                 "repository config must include at least one branch: {}",
-                repository_path
-            ));
-        }
-
-        if self.pipeline.steps.is_empty() {
-            return Err(cid_base::err!(
-                "repository config must include at least one pipeline step: {}",
                 repository_path
             ));
         }
@@ -246,17 +228,6 @@ fn default_branches() -> Vec<String> {
     vec!["main".to_string()]
 }
 
-fn default_image() -> String {
-    "alpine:3.20".to_string()
-}
-
-fn default_steps() -> Vec<PipelineStepConfig> {
-    vec![PipelineStepConfig {
-        name: "noop".to_string(),
-        command: "echo no pipeline configured".to_string(),
-    }]
-}
-
 #[cfg(test)]
 mod tests {
     use cid_base::file_path::FilePath;
@@ -269,14 +240,18 @@ mod tests {
         let pal = PalMock::new();
         pal.set_directory("repos/foo");
         pal.set_directory("repos/foo/.git");
+        pal.set_directory("repos/foo/.devcontainer");
+        pal.set_directory("repos/foo/scripts");
         pal.set_file(
             "cid-config.yaml",
             "state_dir: state\npoll_interval_seconds: 5\nrepositories:\n  - path: repos/foo\n",
         );
+        pal.set_file("repos/foo/.cid/cid.yaml", "branches: [main]\n");
         pal.set_file(
-            "repos/foo/.cid/cid.yaml",
-            "branches: [main]\npipeline:\n  image: rust:1.85\n  steps:\n    - name: test\n      command: cargo test\n",
+            "repos/foo/.devcontainer/devcontainer.json",
+            "{\"image\":\"rust:1.85\"}",
         );
+        pal.set_file("repos/foo/scripts/ci.sh", "#!/usr/bin/env bash\nnao ci\n");
 
         let config = CidConfig::load_from_path(&FilePath::new("cid-config.yaml"), &pal).unwrap();
         let repositories = config.repositories(&pal).unwrap();
@@ -284,7 +259,11 @@ mod tests {
         assert_eq!(config.poll_interval().as_secs(), 5);
         assert_eq!(repositories.len(), 1);
         assert_eq!(repositories[0].name(), "foo");
-        assert_eq!(repositories[0].pipeline().image(), "rust:1.85");
+        assert_eq!(repositories[0].pipeline().image(), "devcontainer");
+        assert_eq!(
+            repositories[0].pipeline().steps()[0].name(),
+            "build devcontainer"
+        );
     }
 
     #[test]
@@ -307,16 +286,67 @@ mod tests {
         let pal = PalMock::new();
         pal.set_directory("repos/foo");
         pal.set_directory("repos/foo/.git");
+        pal.set_directory("repos/foo/.devcontainer");
+        pal.set_directory("repos/foo/scripts");
         pal.set_file("cid-config.yaml", "repositories:\n  - path: repos/foo\n");
         pal.set_file(
             "repos/foo/.cid/cid.yaml",
-            "branches: [main]\npipeline:\n  image: rust:1.85\n  steps:\n    - name: test\n      command: cargo test\n",
+            "branches: [main]\nartifact_paths:\n  - target\n",
         );
+        pal.set_file(
+            "repos/foo/.devcontainer/devcontainer.json",
+            "{\"image\":\"rust:1.85\"}",
+        );
+        pal.set_file("repos/foo/scripts/ci.sh", "#!/usr/bin/env bash\nnao ci\n");
 
         let config = CidConfig::load_from_path(&FilePath::new("cid-config.yaml"), &pal).unwrap();
         let repositories = config.repositories(&pal).unwrap();
 
         assert_eq!(repositories[0].branch_rules()[0].branch(), "main");
-        assert_eq!(repositories[0].pipeline().image(), "rust:1.85");
+        assert_eq!(
+            repositories[0].pipeline().artifact_paths()[0].as_str(),
+            "target"
+        );
+    }
+
+    #[test]
+    fn load_from_path_rejects_missing_devcontainer() {
+        let pal = PalMock::new();
+        pal.set_directory("repos/foo");
+        pal.set_directory("repos/foo/.git");
+        pal.set_directory("repos/foo/scripts");
+        pal.set_file("cid-config.yaml", "repositories:\n  - path: repos/foo\n");
+        pal.set_file("repos/foo/.cid/cid.yaml", "branches: [main]\n");
+        pal.set_file("repos/foo/scripts/ci.sh", "#!/usr/bin/env bash\nnao ci\n");
+
+        let error = CidConfig::load_from_path(&FilePath::new("cid-config.yaml"), &pal).unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("repository is missing .devcontainer/devcontainer.json")
+        );
+    }
+
+    #[test]
+    fn load_from_path_rejects_missing_ci_script() {
+        let pal = PalMock::new();
+        pal.set_directory("repos/foo");
+        pal.set_directory("repos/foo/.git");
+        pal.set_directory("repos/foo/.devcontainer");
+        pal.set_file("cid-config.yaml", "repositories:\n  - path: repos/foo\n");
+        pal.set_file("repos/foo/.cid/cid.yaml", "branches: [main]\n");
+        pal.set_file(
+            "repos/foo/.devcontainer/devcontainer.json",
+            "{\"image\":\"rust:1.85\"}",
+        );
+
+        let error = CidConfig::load_from_path(&FilePath::new("cid-config.yaml"), &pal).unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("repository is missing scripts/ci.sh")
+        );
     }
 }

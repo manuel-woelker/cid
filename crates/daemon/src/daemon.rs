@@ -1,6 +1,9 @@
 use cid_base::logging::info;
-use cid_base::result::CidResult;
+use cid_base::result::{CidResult, ResultExt};
 use cid_pal::pal::PalHandle;
+use cid_pal::process_command::ProcessCommand;
+use cid_pal::process_event::ProcessEvent;
+use cid_pal::process_event_sink::ProcessEventSink;
 use serde::{Deserialize, Serialize};
 
 use crate::config::CidConfig;
@@ -38,6 +41,7 @@ pub struct RunCycleReport {
 
 impl CidDaemon {
     pub fn from_config(config: &CidConfig, pal: PalHandle) -> CidResult<Self> {
+        ensure_devcontainer_cli_available(&*pal)?;
         let store = CidStateStore::new(config.state_dir().clone());
         let mut state = store.load()?;
         let repositories = config.repositories(&*pal)?;
@@ -129,6 +133,36 @@ impl CidDaemon {
     }
 }
 
+fn ensure_devcontainer_cli_available(pal: &dyn cid_pal::pal::Pal) -> CidResult<()> {
+    let result = pal
+        .run_process(
+            &ProcessCommand {
+                executable: "devcontainer".into(),
+                arguments: vec!["--version".into()],
+                working_directory: None,
+                environment: Vec::new(),
+            },
+            &mut NullProcessSink,
+        )
+        .context("failed to execute `devcontainer --version`")?;
+
+    if result.exit_code != Some(0) {
+        return Err(cid_base::err!(
+            "`cid` requires a working Dev Container CLI on the host; `devcontainer --version` failed"
+        ));
+    }
+
+    Ok(())
+}
+
+struct NullProcessSink;
+
+impl ProcessEventSink for NullProcessSink {
+    fn handle_event(&mut self, _event: ProcessEvent) -> CidResult<()> {
+        Ok(())
+    }
+}
+
 impl DaemonState {
     pub fn new(
         repositories: Vec<Repository>,
@@ -184,10 +218,13 @@ fn sync_repositories(state: &mut DaemonState, repositories: Vec<Repository>) {
 #[cfg(test)]
 mod tests {
     use cid_base::file_path::FilePath;
+    use cid_base::timestamp::Timestamp;
+    use cid_pal::pal_mock::PalMock;
+    use cid_pal::process_result::ProcessResult;
 
     use crate::repository::{BranchRule, Pipeline, PipelineStep, Repository};
 
-    use super::{DaemonState, sync_repositories};
+    use super::{DaemonState, ensure_devcontainer_cli_available, sync_repositories};
 
     #[test]
     fn repository_sync_replaces_in_memory_registry() {
@@ -248,6 +285,40 @@ mod tests {
         assert_eq!(
             state.repositories()[0].status().last_error(),
             Some("watch failed")
+        );
+    }
+
+    #[test]
+    fn startup_validation_requires_devcontainer_cli() {
+        let pal = PalMock::new();
+        pal.set_process_execution(
+            cid_pal::process_command::ProcessCommand {
+                executable: "devcontainer".into(),
+                arguments: vec!["--version".into()],
+                working_directory: None,
+                environment: Vec::new(),
+            },
+            Vec::new(),
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(1),
+                exit_code: Some(0),
+            },
+        );
+
+        ensure_devcontainer_cli_available(&pal).unwrap();
+    }
+
+    #[test]
+    fn startup_validation_fails_when_devcontainer_cli_is_unavailable() {
+        let pal = PalMock::new();
+
+        let error = ensure_devcontainer_cli_available(&pal).unwrap_err();
+
+        assert!(
+            error
+                .to_test_string()
+                .contains("failed to execute `devcontainer --version`")
         );
     }
 }

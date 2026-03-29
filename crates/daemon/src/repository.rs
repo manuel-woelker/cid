@@ -110,6 +110,20 @@ impl BranchRule {
 }
 
 impl Pipeline {
+    pub fn for_devcontainer(artifact_paths: Vec<FilePath>) -> Self {
+        Self {
+            image: "devcontainer".into(),
+            steps: vec![
+                PipelineStep::new(
+                    "build devcontainer",
+                    "devcontainer build --workspace-folder .",
+                ),
+                PipelineStep::new("run ci script", "./scripts/ci.sh"),
+            ],
+            artifact_paths,
+        }
+    }
+
     pub fn new(
         image: impl Into<SharedString>,
         steps: Vec<PipelineStep>,
@@ -226,5 +240,16 @@ mod tests {
         assert_eq!(repository.branch_rules()[0].branch(), "main");
         assert_eq!(repository.pipeline().image(), "alpine:3.20");
         assert_eq!(repository.pipeline().steps()[0].command(), "cargo test");
+    }
+
+    #[test]
+    fn devcontainer_pipeline_exposes_expected_steps() {
+        let pipeline = Pipeline::for_devcontainer(vec![FilePath::new("target/nextest")]);
+
+        assert_eq!(pipeline.image(), "devcontainer");
+        assert_eq!(pipeline.steps().len(), 2);
+        assert_eq!(pipeline.steps()[0].name(), "build devcontainer");
+        assert_eq!(pipeline.steps()[1].command(), "./scripts/ci.sh");
+        assert_eq!(pipeline.artifact_paths()[0].as_str(), "target/nextest");
     }
 }
