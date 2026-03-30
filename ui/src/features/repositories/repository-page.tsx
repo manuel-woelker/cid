@@ -14,7 +14,8 @@ import { Link, useParams } from "@tanstack/react-router";
 import { getRepository, getRepositoryBranches } from "../../lib/api/client";
 import type { BranchSummary, Repository } from "../../lib/api/types";
 import { statusColor } from "../../lib/run-status";
-import { formatTimestamp, shortCommit } from "../../lib/time";
+import { shortCommit } from "../../lib/time";
+import { TimestampText } from "../../lib/timestamp-text";
 
 interface RepositoryPageState {
   repository: Repository | null;
@@ -111,7 +112,9 @@ export function RepositoryPage() {
                 {state.repository.branch_rules.length}
               </Descriptions.Item>
               <Descriptions.Item label="Last seen">
-                {formatTimestamp(state.repository.status.last_seen_at_ms)}
+                <TimestampText
+                  timestampMs={state.repository.status.last_seen_at_ms}
+                />
               </Descriptions.Item>
               <Descriptions.Item label="Default image">
                 <Typography.Text code>
@@ -171,9 +174,13 @@ export function RepositoryPage() {
                 title: "Latest activity",
                 key: "activity",
                 render: (_, branch) =>
-                  branch.latest_run
-                    ? formatTimestamp(branch.latest_run.activity_timestamp_ms)
-                    : "Not yet",
+                  branch.latest_run ? (
+                    <TimestampText
+                      timestampMs={branch.latest_run.activity_timestamp_ms}
+                    />
+                  ) : (
+                    "Not yet"
+                  ),
               },
               {
                 title: "Runs",

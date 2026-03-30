@@ -16,7 +16,8 @@ import { Link } from "@tanstack/react-router";
 import { getRepositories, getRuns, getSummary } from "../../lib/api/client";
 import type { Repository, Run, Summary } from "../../lib/api/types";
 import { statusColor } from "../../lib/run-status";
-import { formatTimestamp, shortCommit } from "../../lib/time";
+import { shortCommit } from "../../lib/time";
+import { TimestampText } from "../../lib/timestamp-text";
 import { ReplayRunButton } from "../runs/replay-run-button";
 
 interface DashboardState {
@@ -186,7 +187,9 @@ export function DashboardPage() {
                     </Space>
                     <Typography.Paragraph className="muted-text compact-paragraph">
                       Last seen:{" "}
-                      {formatTimestamp(repository.status.last_seen_at_ms)}
+                      <TimestampText
+                        timestampMs={repository.status.last_seen_at_ms}
+                      />
                     </Typography.Paragraph>
                     {repository.status.last_error ? (
                       <Alert
@@ -245,7 +248,9 @@ export function DashboardPage() {
                   title: "Queued",
                   dataIndex: "queued_at_ms",
                   key: "queued_at_ms",
-                  render: (value: number) => formatTimestamp(value),
+                  render: (value: number) => (
+                    <TimestampText timestampMs={value} />
+                  ),
                 },
                 {
                   title: "Steps",

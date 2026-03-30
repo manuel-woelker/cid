@@ -16,7 +16,8 @@ import { useParams } from "@tanstack/react-router";
 import { getRun, getRunStepLog } from "../../lib/api/client";
 import type { Run } from "../../lib/api/types";
 import { statusColor } from "../../lib/run-status";
-import { formatDuration, formatTimestamp, shortCommit } from "../../lib/time";
+import { formatDuration, shortCommit } from "../../lib/time";
+import { TimestampText } from "../../lib/timestamp-text";
 import { AnsiLogOutput } from "./ansi-log-output";
 import { ReplayRunButton } from "./replay-run-button";
 
@@ -182,13 +183,13 @@ export function RunDetailPage() {
 
               <Descriptions bordered column={1}>
                 <Descriptions.Item label="Queued at">
-                  {formatTimestamp(run.queued_at_ms)}
+                  <TimestampText timestampMs={run.queued_at_ms} />
                 </Descriptions.Item>
                 <Descriptions.Item label="Started at">
-                  {formatTimestamp(run.started_at_ms)}
+                  <TimestampText timestampMs={run.started_at_ms} />
                 </Descriptions.Item>
                 <Descriptions.Item label="Finished at">
-                  {formatTimestamp(run.finished_at_ms)}
+                  <TimestampText timestampMs={run.finished_at_ms} />
                 </Descriptions.Item>
                 <Descriptions.Item label="Steps">
                   {run.steps.length}
@@ -277,7 +278,12 @@ export function RunDetailPage() {
           {run && run.events.length > 0 ? (
             <Timeline
               items={run.events.map((event) => ({
-                children: `${formatTimestamp(event.timestamp_ms)} · ${event.message}`,
+                children: (
+                  <>
+                    <TimestampText timestampMs={event.timestamp_ms} /> ·{" "}
+                    {event.message}
+                  </>
+                ),
               }))}
             />
           ) : (

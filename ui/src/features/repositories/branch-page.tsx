@@ -14,7 +14,8 @@ import { Link, useParams } from "@tanstack/react-router";
 import { getRepositoryBranch } from "../../lib/api/client";
 import type { BranchDetail, Run } from "../../lib/api/types";
 import { statusColor } from "../../lib/run-status";
-import { formatTimestamp, shortCommit } from "../../lib/time";
+import { shortCommit } from "../../lib/time";
+import { TimestampText } from "../../lib/timestamp-text";
 import { ReplayRunButton } from "../runs/replay-run-button";
 
 export function BranchPage() {
@@ -107,11 +108,13 @@ export function BranchPage() {
                 )}
               </Descriptions.Item>
               <Descriptions.Item label="Latest activity">
-                {detail.branch.latest_run
-                  ? formatTimestamp(
-                      detail.branch.latest_run.activity_timestamp_ms,
-                    )
-                  : "Not yet"}
+                {detail.branch.latest_run ? (
+                  <TimestampText
+                    timestampMs={detail.branch.latest_run.activity_timestamp_ms}
+                  />
+                ) : (
+                  "Not yet"
+                )}
               </Descriptions.Item>
               <Descriptions.Item label="Runs">
                 {detail.branch.run_count}
@@ -160,13 +163,17 @@ export function BranchPage() {
                 title: "Queued",
                 dataIndex: "queued_at_ms",
                 key: "queued_at_ms",
-                render: (value: number) => formatTimestamp(value),
+                render: (value: number) => (
+                  <TimestampText timestampMs={value} />
+                ),
               },
               {
                 title: "Finished",
                 dataIndex: "finished_at_ms",
                 key: "finished_at_ms",
-                render: (value: number | null) => formatTimestamp(value),
+                render: (value: number | null) => (
+                  <TimestampText timestampMs={value} />
+                ),
               },
               {
                 title: "Actions",
