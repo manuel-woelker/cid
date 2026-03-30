@@ -28,6 +28,7 @@ pub struct CidDaemon {
     snapshot: Arc<RwLock<DaemonState>>,
     command_sender: mpsc::Sender<DaemonCommand>,
     command_receiver: mpsc::Receiver<DaemonCommand>,
+    dispatch_wakeup_pending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -84,6 +85,7 @@ impl CidDaemon {
             snapshot,
             command_sender,
             command_receiver,
+            dispatch_wakeup_pending: false,
         })
     }
 
@@ -95,17 +97,33 @@ impl CidDaemon {
     }
 
     pub fn run_forever(&mut self, poll_interval: std::time::Duration) -> CidResult<()> {
+        let mut next_discovery_at = Instant::now();
+
         loop {
-            self.process_pending_commands()?;
-            let report = self.run_cycle()?;
-            debug!(
-                repository_count = self.repositories().len(),
-                discovered_commits = report.discovered_commits,
-                queued_runs = report.queued_runs,
-                executed_runs = report.executed_runs,
-                "daemon cycle completed"
-            );
-            self.wait_for_next_cycle(poll_interval)?;
+            let mut made_progress = self.process_pending_commands()?;
+
+            if Instant::now() >= next_discovery_at {
+                let report = self.run_discovery_cycle()?;
+                debug!(
+                    repository_count = self.repositories().len(),
+                    discovered_commits = report.discovered_commits,
+                    queued_runs = report.queued_runs,
+                    executed_runs = report.executed_runs,
+                    "daemon discovery cycle completed"
+                );
+                next_discovery_at = Instant::now() + poll_interval;
+                made_progress = true;
+            }
+
+            if self.dispatch_wakeup_pending {
+                let executed_run = self.dispatch_next_run()?;
+                made_progress = made_progress || executed_run;
+                self.dispatch_wakeup_pending = has_queued_runs(&self.state);
+            }
+
+            if !made_progress {
+                self.wait_for_next_event(next_discovery_at)?;
+            }
         }
     }
 
@@ -125,38 +143,23 @@ impl CidDaemon {
         self.store.state_file_path()
     }
 
-    pub fn run_cycle(&mut self) -> CidResult<RunCycleReport> {
+    pub fn run_discovery_cycle(&mut self) -> CidResult<RunCycleReport> {
         self.reload_externally_added_runs()?;
-        let repositories = self.config.repositories(&*self.pal)?;
-        sync_repositories(&mut self.state, repositories);
-
-        let now_ms = self.now_ms();
-        let discoveries = self.watcher.poll(
-            &mut self.state.repositories,
-            &self.state.discovered_commits,
-            now_ms,
-        );
+        self.sync_repositories_from_config()?;
+        let discoveries = self.discover_commits();
         let discovered_count = discoveries.len();
         self.state.discovered_commits.extend(discoveries);
+        let queued_runs = self.plan_runs();
+        self.persist_and_publish_state()?;
 
-        let queued_runs = self.scheduler.enqueue_runs(
-            &self.state.repositories,
-            &self.state.discovered_commits,
-            &mut self.state.runs,
-        );
-
-        let executed_runs = self
-            .runner
-            .execute_queued_runs(&self.state.repositories, &mut self.state.runs)?;
-        self.reload_externally_added_runs()?;
-        self.store.save(&self.state)?;
-        self.publish_snapshot()?;
-        self.process_pending_commands()?;
+        if queued_runs > 0 {
+            self.wake_dispatch();
+        }
 
         Ok(RunCycleReport {
             discovered_commits: discovered_count,
             queued_runs,
-            executed_runs,
+            executed_runs: 0,
         })
     }
 
@@ -187,26 +190,30 @@ impl CidDaemon {
         Ok(())
     }
 
-    fn process_pending_commands(&mut self) -> CidResult<()> {
+    fn process_pending_commands(&mut self) -> CidResult<bool> {
+        let mut handled_commands = false;
+
         while let Ok(command) = self.command_receiver.try_recv() {
             self.handle_command(command)?;
+            handled_commands = true;
         }
 
-        Ok(())
+        Ok(handled_commands)
     }
 
-    fn wait_for_next_cycle(&mut self, duration: Duration) -> CidResult<()> {
-        let deadline = Instant::now() + duration;
-
+    fn wait_for_next_event(&mut self, next_discovery_at: Instant) -> CidResult<()> {
         loop {
             let now = Instant::now();
-            if now >= deadline {
+            if now >= next_discovery_at {
                 return Ok(());
             }
 
-            let timeout = (deadline - now).min(Duration::from_millis(100));
+            let timeout = (next_discovery_at - now).min(Duration::from_millis(100));
             match self.command_receiver.recv_timeout(timeout) {
-                Ok(command) => self.handle_command(command)?,
+                Ok(command) => {
+                    self.handle_command(command)?;
+                    return Ok(());
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
             }
@@ -241,10 +248,55 @@ impl CidDaemon {
 
         let next_run = replay_run_from_source(&self.state, &repository, &source_run, self.now_ms());
         self.state.push_run(next_run.clone());
-        self.store.save(&self.state)?;
-        self.publish_snapshot()?;
+        self.persist_and_publish_state()?;
+        self.wake_dispatch();
 
         Ok(next_run)
+    }
+
+    fn sync_repositories_from_config(&mut self) -> CidResult<()> {
+        let repositories = self.config.repositories(&*self.pal)?;
+        sync_repositories(&mut self.state, repositories);
+        Ok(())
+    }
+
+    fn discover_commits(&mut self) -> Vec<DiscoveredCommit> {
+        let now_ms = self.now_ms();
+        self.watcher.poll(
+            &mut self.state.repositories,
+            &self.state.discovered_commits,
+            now_ms,
+        )
+    }
+
+    fn plan_runs(&mut self) -> usize {
+        self.scheduler.enqueue_runs(
+            &self.state.repositories,
+            &self.state.discovered_commits,
+            &mut self.state.runs,
+        )
+    }
+
+    fn dispatch_next_run(&mut self) -> CidResult<bool> {
+        let executed = self
+            .runner
+            .execute_next_queued_run(&self.state.repositories, &mut self.state.runs)?;
+
+        if executed {
+            self.reload_externally_added_runs()?;
+            self.persist_and_publish_state()?;
+        }
+
+        Ok(executed)
+    }
+
+    fn persist_and_publish_state(&mut self) -> CidResult<()> {
+        self.store.save(&self.state)?;
+        self.publish_snapshot()
+    }
+
+    fn wake_dispatch(&mut self) {
+        self.dispatch_wakeup_pending = true;
     }
 }
 
@@ -306,6 +358,13 @@ impl DaemonState {
     pub fn push_run(&mut self, run: Run) {
         self.runs.push(run);
     }
+}
+
+fn has_queued_runs(state: &DaemonState) -> bool {
+    state
+        .runs()
+        .iter()
+        .any(|run| run.status() == crate::run_status::RunStatus::Queued)
 }
 
 impl DaemonApi for DaemonHandle {

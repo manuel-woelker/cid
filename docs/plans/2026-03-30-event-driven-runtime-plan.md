@@ -324,9 +324,9 @@ Lower polling helps commit discovery latency, but it is not the right long-term 
 # How should this work be tracked?
 
 - [ ] Add an architecture note describing the internal event boundaries and runtime stages
-- [ ] Split the current daemon cycle into explicit phase helpers
-- [ ] Make replay queue work and wake dispatch immediately
-- [ ] Decouple queued-run execution from repository polling cadence
+- [x] Split the current daemon cycle into explicit phase helpers
+- [x] Make replay queue work and wake dispatch immediately
+- [x] Decouple queued-run execution from repository polling cadence
 - [ ] Introduce a dispatcher that claims queued runs
 - [ ] Change the runner to execute claimed runs instead of scanning all queued runs
 - [ ] Add a single-worker execution path triggered by dispatcher wakeups

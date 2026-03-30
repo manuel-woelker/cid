@@ -52,6 +52,30 @@ impl DockerRunner {
         Ok(executed)
     }
 
+    pub fn execute_next_queued_run(
+        &self,
+        repositories: &[Repository],
+        runs: &mut [Run],
+    ) -> CidResult<bool> {
+        for run in runs {
+            if run.status() != RunStatus::Queued {
+                continue;
+            }
+
+            let Some(repository) = repositories
+                .iter()
+                .find(|repository| repository.id() == run.repository_id())
+            else {
+                continue;
+            };
+
+            self.execute_run(repository, run)?;
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
     fn execute_run(&self, repository: &Repository, run: &mut Run) -> CidResult<()> {
         let started_at_ms = self.now_ms();
         info!(
