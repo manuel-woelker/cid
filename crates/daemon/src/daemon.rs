@@ -1,4 +1,5 @@
 use std::sync::{Arc, RwLock, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::CidConfig;
@@ -23,12 +24,13 @@ pub struct CidDaemon {
     store: CidStateStore,
     watcher: RepositoryWatcher,
     scheduler: Scheduler,
-    runner: DockerRunner,
     state: DaemonState,
     snapshot: Arc<RwLock<DaemonState>>,
     command_sender: mpsc::Sender<DaemonCommand>,
     command_receiver: mpsc::Receiver<DaemonCommand>,
+    execution_task_sender: mpsc::Sender<ExecutionTask>,
     dispatch_wakeup_pending: bool,
+    execution_in_progress: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -61,6 +63,14 @@ enum DaemonCommand {
         run_id: u64,
         response_sender: mpsc::Sender<CidResult<Run>>,
     },
+    ExecutionFinished {
+        run: Run,
+    },
+}
+
+struct ExecutionTask {
+    repository: Repository,
+    run: Run,
 }
 
 impl CidDaemon {
@@ -73,10 +83,20 @@ impl CidDaemon {
         store.save(&state)?;
         let snapshot = Arc::new(RwLock::new(state.clone()));
         let (command_sender, command_receiver) = mpsc::channel();
+        let (execution_task_sender, execution_task_receiver) = mpsc::channel();
+        let worker_runner = DockerRunner::new(store.clone(), pal.clone());
+        let worker_command_sender = command_sender.clone();
+
+        thread::spawn(move || {
+            run_execution_worker(
+                worker_runner,
+                execution_task_receiver,
+                worker_command_sender,
+            );
+        });
 
         Ok(Self {
             config: config.clone(),
-            runner: DockerRunner::new(store.clone(), pal.clone()),
             scheduler: Scheduler::new(),
             watcher: RepositoryWatcher::new(pal.clone()),
             pal,
@@ -85,7 +105,9 @@ impl CidDaemon {
             snapshot,
             command_sender,
             command_receiver,
+            execution_task_sender,
             dispatch_wakeup_pending: false,
+            execution_in_progress: false,
         })
     }
 
@@ -115,10 +137,9 @@ impl CidDaemon {
                 made_progress = true;
             }
 
-            if self.dispatch_wakeup_pending {
+            if self.dispatch_wakeup_pending && !self.execution_in_progress {
                 let executed_run = self.dispatch_next_run()?;
                 made_progress = made_progress || executed_run;
-                self.dispatch_wakeup_pending = has_queued_runs(&self.state);
             }
 
             if !made_progress {
@@ -229,6 +250,7 @@ impl CidDaemon {
                 let _ = response_sender.send(self.replay_run(run_id));
                 Ok(())
             }
+            DaemonCommand::ExecutionFinished { run } => self.complete_run(run),
         }
     }
 
@@ -278,16 +300,19 @@ impl CidDaemon {
     }
 
     fn dispatch_next_run(&mut self) -> CidResult<bool> {
-        let executed = self
-            .runner
-            .execute_next_queued_run(&self.state.repositories, &mut self.state.runs)?;
+        let Some((repository, run)) = self.claim_next_queued_run() else {
+            self.dispatch_wakeup_pending = false;
+            return Ok(false);
+        };
 
-        if executed {
-            self.reload_externally_added_runs()?;
-            self.persist_and_publish_state()?;
-        }
+        self.persist_and_publish_state()?;
+        self.execution_task_sender
+            .send(ExecutionTask { repository, run })
+            .map_err(|_| cid_base::err!("execution task channel is closed"))?;
+        self.execution_in_progress = true;
+        self.dispatch_wakeup_pending = false;
 
-        Ok(executed)
+        Ok(true)
     }
 
     fn persist_and_publish_state(&mut self) -> CidResult<()> {
@@ -297,6 +322,43 @@ impl CidDaemon {
 
     fn wake_dispatch(&mut self) {
         self.dispatch_wakeup_pending = true;
+    }
+
+    fn claim_next_queued_run(&mut self) -> Option<(Repository, Run)> {
+        let next_run_index = self
+            .state
+            .runs
+            .iter()
+            .position(|run| run.status() == crate::run_status::RunStatus::Queued)?;
+        let repository = self
+            .state
+            .repositories()
+            .iter()
+            .find(|repository| repository.id() == self.state.runs[next_run_index].repository_id())
+            .cloned()?;
+
+        let started_at_ms = self.now_ms();
+        self.state.runs[next_run_index].start(started_at_ms);
+        let run = self.state.runs[next_run_index].clone();
+
+        Some((repository, run))
+    }
+
+    fn complete_run(&mut self, completed_run: Run) -> CidResult<()> {
+        if let Some(run) = self
+            .state
+            .runs
+            .iter_mut()
+            .find(|run| run.id() == completed_run.id())
+        {
+            *run = completed_run;
+        }
+
+        self.execution_in_progress = false;
+        if has_queued_runs(&self.state) {
+            self.wake_dispatch();
+        }
+        self.persist_and_publish_state()
     }
 }
 
@@ -456,6 +518,22 @@ fn replay_run_from_source(
             })
             .collect(),
     )
+}
+
+fn run_execution_worker(
+    runner: DockerRunner,
+    execution_task_receiver: mpsc::Receiver<ExecutionTask>,
+    command_sender: mpsc::Sender<DaemonCommand>,
+) {
+    while let Ok(task) = execution_task_receiver.recv() {
+        let completed_run = runner.execute_claimed_run(&task.repository, task.run);
+        if command_sender
+            .send(DaemonCommand::ExecutionFinished { run: completed_run })
+            .is_err()
+        {
+            return;
+        }
+    }
 }
 
 #[cfg(test)]

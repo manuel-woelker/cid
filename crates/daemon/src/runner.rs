@@ -52,40 +52,15 @@ impl DockerRunner {
         Ok(executed)
     }
 
-    pub fn execute_next_queued_run(
-        &self,
-        repositories: &[Repository],
-        runs: &mut [Run],
-    ) -> CidResult<bool> {
-        for run in runs {
-            if run.status() != RunStatus::Queued {
-                continue;
-            }
-
-            let Some(repository) = repositories
-                .iter()
-                .find(|repository| repository.id() == run.repository_id())
-            else {
-                continue;
-            };
-
-            self.execute_run(repository, run)?;
-            return Ok(true);
+    pub fn execute_claimed_run(&self, repository: &Repository, mut run: Run) -> Run {
+        if let Err(error) = self.execute_run(repository, &mut run) {
+            self.mark_run_failed(repository, &mut run, &error.to_test_string());
         }
 
-        Ok(false)
+        run
     }
 
     fn execute_run(&self, repository: &Repository, run: &mut Run) -> CidResult<()> {
-        let started_at_ms = self.now_ms();
-        info!(
-            run_id = run.id(),
-            repository = run.repository_name(),
-            branch = run.branch(),
-            commit_sha = run.commit_sha(),
-            "run started"
-        );
-        run.start(started_at_ms);
         let run_id = run.id();
 
         let repository_path = resolve_repository_path(repository.path())?;
@@ -213,6 +188,31 @@ impl DockerRunner {
         );
         run.finish(finished_at_ms, RunStatus::Passed);
         Ok(())
+    }
+
+    fn mark_run_failed(&self, repository: &Repository, run: &mut Run, message: &str) {
+        let finished_at_ms = self.now_ms();
+        let failed_step_index = run
+            .steps()
+            .iter()
+            .enumerate()
+            .find_map(|(index, step)| (!step.status().is_finished()).then_some(index));
+
+        if let Some(step_index) = failed_step_index {
+            let log_path = self
+                .store
+                .write_step_log(repository, run.id(), step_index, message)
+                .ok();
+            run.steps_mut()[step_index].mark_finished(
+                finished_at_ms,
+                RunStatus::Failed,
+                None,
+                log_path,
+            );
+        }
+
+        run.push_event(finished_at_ms, message.to_string());
+        run.finish(finished_at_ms, RunStatus::Failed);
     }
 
     pub fn build_command(
