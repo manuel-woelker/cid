@@ -323,19 +323,20 @@ Lower polling helps commit discovery latency, but it is not the right long-term 
 
 # How should this work be tracked?
 
-- [ ] Add an architecture note describing the internal event boundaries and runtime stages
+- [x] Add an architecture note describing the internal event boundaries and runtime stages
 - [x] Split the current daemon cycle into explicit phase helpers
 - [x] Make replay queue work and wake dispatch immediately
 - [x] Decouple queued-run execution from repository polling cadence
-- [ ] Introduce a dispatcher that claims queued runs
-- [ ] Change the runner to execute claimed runs instead of scanning all queued runs
-- [ ] Add a single-worker execution path triggered by dispatcher wakeups
-- [ ] Publish snapshots after planning, dispatch, and execution transitions
-- [ ] Add tests proving retries start without waiting for the next poll interval
-- [ ] Add tests proving commit discovery continues while execution is busy
-- [ ] Add tests for dispatcher claim behavior and no-double-start guarantees
-- [ ] Add concurrency limit configuration and tests if that policy is introduced in scope
-- [ ] Run `./scripts/check-code.sh`
+- [x] Introduce a dispatcher that claims queued runs
+- [x] Change the runner to execute claimed runs instead of scanning all queued runs
+- [x] Add a single-worker execution path triggered by dispatcher wakeups
+- [x] Publish snapshots after planning, dispatch, and execution transitions
+- [x] Add tests proving retries start without waiting for the next poll interval
+- [x] Add tests proving commit discovery continues while execution is busy
+- [x] Add tests for dispatcher claim behavior and no-double-start guarantees
+- [ ] ~~Add concurrency limit configuration and tests if that policy is introduced in scope~~
+  Deferred for now: `cid` should prefer a single executor by default to keep the runtime simple and avoid taking too many system resources from the user's machine.
+- [x] Run `./scripts/check-code.sh`
 
 # How should this be verified?
 

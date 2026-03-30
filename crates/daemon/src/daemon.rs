@@ -137,8 +137,8 @@ impl CidDaemon {
                 made_progress = true;
             }
 
-            if self.dispatch_wakeup_pending && !self.execution_in_progress {
-                let executed_run = self.dispatch_next_run()?;
+            if self.dispatch_wakeup_pending {
+                let executed_run = self.dispatch_if_possible()?;
                 made_progress = made_progress || executed_run;
             }
 
@@ -313,6 +313,14 @@ impl CidDaemon {
         self.dispatch_wakeup_pending = false;
 
         Ok(true)
+    }
+
+    fn dispatch_if_possible(&mut self) -> CidResult<bool> {
+        if self.execution_in_progress {
+            return Ok(false);
+        }
+
+        self.dispatch_next_run()
     }
 
     fn persist_and_publish_state(&mut self) -> CidResult<()> {
@@ -538,17 +546,144 @@ fn run_execution_worker(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::{Duration, Instant, SystemTime};
+
     use cid_base::file_path::FilePath;
+    use cid_base::result::CidResult;
     use cid_base::timestamp::Timestamp;
+    use cid_pal::pal::{Pal, PalHandle, ReadSeek};
     use cid_pal::pal_mock::PalMock;
+    use cid_pal::process_command::ProcessCommand;
+    use cid_pal::process_event::ProcessEvent;
+    use cid_pal::process_event_sink::ProcessEventSink;
+    use cid_pal::process_output_event::ProcessOutputEvent;
+    use cid_pal::process_output_stream::ProcessOutputStream;
     use cid_pal::process_result::ProcessResult;
 
+    use crate::config::CidConfig;
+    use crate::persistence::CidStateStore;
     use crate::repository::{BranchRule, Pipeline, PipelineStep, Repository};
     use crate::run::{Run, RunStep};
+    use crate::run_status::RunStatus;
+    use crate::runner::DockerRunner;
 
     use super::{
-        DaemonState, ensure_devcontainer_cli_available, merge_missing_runs, sync_repositories,
+        CidDaemon, DaemonApi, DaemonState, ensure_devcontainer_cli_available, merge_missing_runs,
+        sync_repositories,
     };
+
+    #[derive(Clone, Debug)]
+    struct BlockingPal {
+        inner: PalMock,
+        release_pair: Arc<(Mutex<bool>, Condvar)>,
+        started_pair: Arc<(Mutex<bool>, Condvar)>,
+        block_ci_execution: Arc<AtomicBool>,
+    }
+
+    impl BlockingPal {
+        fn new(inner: PalMock) -> Self {
+            Self {
+                inner,
+                release_pair: Arc::new((Mutex::new(false), Condvar::new())),
+                started_pair: Arc::new((Mutex::new(false), Condvar::new())),
+                block_ci_execution: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        fn block_ci_execution(&self) {
+            self.block_ci_execution.store(true, Ordering::SeqCst);
+        }
+
+        fn wait_until_ci_started(&self) {
+            let (lock, cvar) = &*self.started_pair;
+            let mut started = lock.lock().unwrap();
+            while !*started {
+                started = cvar.wait(started).unwrap();
+            }
+        }
+
+        fn release_ci_execution(&self) {
+            let (lock, cvar) = &*self.release_pair;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
+
+        fn set_process_execution(
+            &self,
+            command: ProcessCommand,
+            events: Vec<ProcessEvent>,
+            result: ProcessResult,
+        ) {
+            self.inner.set_process_execution(command, events, result);
+        }
+
+        fn set_file(&self, file_path: &str, content: impl Into<Vec<u8>>) {
+            self.inner.set_file(file_path, content);
+        }
+
+        fn set_directory(&self, path: &str) {
+            self.inner.set_directory(path);
+        }
+    }
+
+    impl Pal for BlockingPal {
+        fn file_exists(&self, path: &FilePath) -> CidResult<bool> {
+            self.inner.file_exists(path)
+        }
+
+        fn directory_exists(&self, path: &FilePath) -> CidResult<bool> {
+            self.inner.directory_exists(path)
+        }
+
+        fn read_file(&self, path: &FilePath) -> CidResult<Box<dyn ReadSeek + 'static>> {
+            self.inner.read_file(path)
+        }
+
+        fn create_directory_all(&self, path: &FilePath) -> CidResult<()> {
+            self.inner.create_directory_all(path)
+        }
+
+        fn write_file(&self, path: &FilePath, content: &[u8]) -> CidResult<()> {
+            self.inner.write_file(path, content)
+        }
+
+        fn run_process(
+            &self,
+            command: &ProcessCommand,
+            sink: &mut dyn ProcessEventSink,
+        ) -> CidResult<ProcessResult> {
+            if self.block_ci_execution.load(Ordering::SeqCst) && command.executable.as_str() == "sh"
+            {
+                let (started_lock, started_cvar) = &*self.started_pair;
+                *started_lock.lock().unwrap() = true;
+                started_cvar.notify_all();
+
+                let (release_lock, release_cvar) = &*self.release_pair;
+                let mut released = release_lock.lock().unwrap();
+                while !*released {
+                    released = release_cvar.wait(released).unwrap();
+                }
+            }
+
+            self.inner.run_process(command, sink)
+        }
+
+        fn now(&self) -> Timestamp {
+            self.inner.now()
+        }
+
+        fn system_time(&self) -> SystemTime {
+            self.inner.system_time()
+        }
+
+        fn sleep(&self, duration: Duration) {
+            self.inner.sleep(duration)
+        }
+    }
 
     #[test]
     fn repository_sync_replaces_in_memory_registry() {
@@ -690,5 +825,355 @@ mod tests {
         assert_eq!(state.runs()[0].id(), 1);
         assert_eq!(state.runs()[1].id(), 2);
         assert_eq!(state.runs()[1].commit_sha(), "existing");
+    }
+
+    #[test]
+    fn replay_dispatches_without_waiting_for_poll_interval() {
+        let (mut daemon, pal, state_dir, repository_path) = test_daemon();
+        pal.block_ci_execution();
+        add_completed_source_run(&mut daemon, "existing");
+        register_runner_commands(
+            &pal,
+            &state_dir,
+            daemon.repositories()[0].clone(),
+            &repository_path,
+        );
+
+        let replayed_run = daemon.replay_run(1).unwrap();
+
+        assert_eq!(replayed_run.status(), RunStatus::Queued);
+        assert!(daemon.dispatch_wakeup_pending);
+        assert_eq!(
+            daemon.handle().snapshot().unwrap().runs()[1].status(),
+            RunStatus::Queued
+        );
+
+        assert!(daemon.dispatch_if_possible().unwrap());
+        pal.wait_until_ci_started();
+
+        let running_run = daemon
+            .state
+            .runs()
+            .iter()
+            .find(|run| run.id() == replayed_run.id())
+            .unwrap();
+        assert_eq!(running_run.status(), RunStatus::Running);
+        assert_eq!(
+            daemon.handle().snapshot().unwrap().runs()[1].status(),
+            RunStatus::Running
+        );
+
+        pal.release_ci_execution();
+        daemon
+            .wait_for_next_event(Instant::now() + Duration::from_millis(200))
+            .unwrap();
+        let finished_run = daemon
+            .state
+            .runs()
+            .iter()
+            .find(|run| run.id() == replayed_run.id())
+            .unwrap();
+        assert!(finished_run.status().is_finished());
+        assert!(
+            daemon
+                .handle()
+                .snapshot()
+                .unwrap()
+                .runs()
+                .iter()
+                .any(|run| run.id() == replayed_run.id() && run.status().is_finished())
+        );
+    }
+
+    #[test]
+    fn commit_discovery_continues_while_execution_is_busy() {
+        let (mut daemon, pal, state_dir, repository_path) = test_daemon();
+        pal.block_ci_execution();
+        add_completed_source_run(&mut daemon, "existing");
+        register_runner_commands(
+            &pal,
+            &state_dir,
+            daemon.repositories()[0].clone(),
+            &repository_path,
+        );
+        register_git_head(&pal, &repository_path, "newcommit1");
+
+        let replayed_run = daemon.replay_run(1).unwrap();
+        assert!(daemon.dispatch_if_possible().unwrap());
+        pal.wait_until_ci_started();
+
+        assert!(daemon.execution_in_progress);
+        let report = daemon.run_discovery_cycle().unwrap();
+
+        assert_eq!(report.discovered_commits, 1);
+        assert_eq!(report.queued_runs, 1);
+        assert!(daemon.execution_in_progress);
+        assert!(
+            daemon
+                .state
+                .runs()
+                .iter()
+                .any(|run| run.id() == replayed_run.id() && run.status() == RunStatus::Running)
+        );
+        assert!(
+            daemon
+                .state
+                .runs()
+                .iter()
+                .any(|run| run.commit_sha() == "newcommit1" && run.status() == RunStatus::Queued)
+        );
+
+        pal.release_ci_execution();
+        daemon
+            .wait_for_next_event(Instant::now() + Duration::from_millis(200))
+            .unwrap();
+    }
+
+    #[test]
+    fn dispatcher_does_not_double_start_and_wakes_when_capacity_returns() {
+        let (mut daemon, pal, state_dir, repository_path) = test_daemon();
+        pal.block_ci_execution();
+        add_completed_source_run(&mut daemon, "existing");
+        add_completed_source_run(&mut daemon, "other");
+        register_runner_commands(
+            &pal,
+            &state_dir,
+            daemon.repositories()[0].clone(),
+            &repository_path,
+        );
+
+        let first_replay = daemon.replay_run(1).unwrap();
+        let second_replay = daemon.replay_run(2).unwrap();
+
+        assert!(daemon.dispatch_if_possible().unwrap());
+        pal.wait_until_ci_started();
+        assert!(daemon.execution_in_progress);
+        assert!(!daemon.dispatch_if_possible().unwrap());
+        assert_eq!(
+            daemon
+                .state
+                .runs()
+                .iter()
+                .filter(|run| run.status() == RunStatus::Running)
+                .count(),
+            1
+        );
+        assert!(
+            daemon
+                .state
+                .runs()
+                .iter()
+                .any(|run| run.id() == second_replay.id() && run.status() == RunStatus::Queued)
+        );
+
+        pal.release_ci_execution();
+        daemon
+            .wait_for_next_event(Instant::now() + Duration::from_millis(200))
+            .unwrap();
+
+        assert!(!daemon.execution_in_progress);
+        assert!(daemon.dispatch_wakeup_pending);
+        assert!(
+            daemon
+                .state
+                .runs()
+                .iter()
+                .any(|run| run.id() == first_replay.id() && run.status().is_finished())
+        );
+        assert!(daemon.dispatch_if_possible().unwrap());
+        assert!(
+            daemon
+                .state
+                .runs()
+                .iter()
+                .any(|run| run.id() == second_replay.id() && run.status() == RunStatus::Running)
+        );
+    }
+
+    fn test_daemon() -> (CidDaemon, BlockingPal, String, FilePath) {
+        let pal = BlockingPal::new(PalMock::new());
+        let state_dir = temp_state_dir("daemon-runtime-state");
+        let repository_path = FilePath::new(temp_state_dir("daemon-runtime-repo"));
+        let config_path = FilePath::new("cid-config.yaml");
+
+        seed_repository_config(&pal, &config_path, &state_dir, &repository_path);
+        register_devcontainer_version_check(&pal);
+
+        let config = CidConfig::load_from_path(&config_path, &pal).unwrap();
+        let daemon = CidDaemon::from_config(&config, PalHandle::new(pal.clone())).unwrap();
+
+        (daemon, pal, state_dir, repository_path)
+    }
+
+    fn seed_repository_config(
+        pal: &BlockingPal,
+        config_path: &FilePath,
+        state_dir: &str,
+        repository_path: &FilePath,
+    ) {
+        pal.set_directory(repository_path.as_str());
+        pal.set_directory(repository_path.join(".git").as_str());
+        pal.set_directory(repository_path.join(".cid").as_str());
+        pal.set_directory(repository_path.join(".devcontainer").as_str());
+        pal.set_directory(repository_path.join("scripts").as_str());
+        pal.set_file(
+            config_path.as_str(),
+            format!(
+                "state_dir: {state_dir}\npoll_interval_seconds: 30\nrepositories:\n  - name: cid\n    path: {}\n",
+                repository_path.as_str(),
+            ),
+        );
+        pal.set_file(
+            repository_path.join(".cid").join("cid.yaml").as_str(),
+            "branches: [main]\n",
+        );
+        pal.set_file(
+            repository_path
+                .join(".devcontainer")
+                .join("devcontainer.json")
+                .as_str(),
+            "{\"image\":\"rust:1.85\"}",
+        );
+        pal.set_file(
+            repository_path.join("scripts").join("ci.sh").as_str(),
+            "#!/usr/bin/env bash\ncargo test\n",
+        );
+    }
+
+    fn register_devcontainer_version_check(pal: &BlockingPal) {
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "devcontainer".into(),
+                arguments: vec!["--version".into()],
+                working_directory: None,
+                environment: Vec::new(),
+            },
+            Vec::new(),
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(1),
+                exit_code: Some(0),
+            },
+        );
+    }
+
+    fn register_git_head(pal: &BlockingPal, repository_path: &FilePath, commit_sha: &str) {
+        pal.set_process_execution(
+            ProcessCommand {
+                executable: "git".into(),
+                arguments: vec!["rev-parse".into(), "refs/heads/main".into()],
+                working_directory: Some(repository_path.clone()),
+                environment: Vec::new(),
+            },
+            vec![ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(10),
+                stream: ProcessOutputStream::Stdout,
+                bytes: format!("{commit_sha}\n").into_bytes(),
+            })],
+            ProcessResult {
+                started_at: Timestamp::new(10),
+                finished_at: Timestamp::new(11),
+                exit_code: Some(0),
+            },
+        );
+    }
+
+    fn register_runner_commands(
+        pal: &BlockingPal,
+        state_dir: &str,
+        repository: Repository,
+        repository_path: &FilePath,
+    ) {
+        let runner = DockerRunner::new(
+            CidStateStore::new(FilePath::new(state_dir)),
+            PalHandle::new(pal.clone()),
+        );
+        let devcontainer_contents = "{\"image\":\"rust:1.85\"}";
+        let image_tag = format!(
+            "cid-devcontainer-cid:{}",
+            &fingerprint(devcontainer_contents)[..12]
+        );
+
+        pal.set_process_execution(
+            runner.build_devcontainer_build_command(repository_path, &image_tag),
+            Vec::new(),
+            ProcessResult {
+                started_at: Timestamp::new(20),
+                finished_at: Timestamp::new(21),
+                exit_code: Some(0),
+            },
+        );
+        pal.set_process_execution(
+            runner.build_command(repository_path, "ci").unwrap(),
+            Vec::new(),
+            ProcessResult {
+                started_at: Timestamp::new(30),
+                finished_at: Timestamp::new(31),
+                exit_code: Some(0),
+            },
+        );
+        let metadata_path = FilePath::new(state_dir)
+            .join("devcontainer-cache")
+            .join(format!(
+                "{}.json",
+                slugify_for_test(&format!("{}-{}", repository.name(), repository.path()))
+            ));
+        let _ = std::fs::remove_file(metadata_path.as_path());
+    }
+
+    fn add_completed_source_run(daemon: &mut CidDaemon, commit_sha: &str) {
+        let repository = daemon.repositories()[0].clone();
+        let next_id = daemon.state.runs().iter().map(Run::id).max().unwrap_or(0) + 1;
+        let mut run = Run::new(
+            next_id,
+            repository.id(),
+            repository.name(),
+            "main",
+            commit_sha,
+            next_id,
+            vec![RunStep::new(
+                "ci",
+                "./scripts/ci.sh",
+                "devcontainer",
+                Vec::new(),
+            )],
+        );
+        run.finish(next_id + 1, RunStatus::Passed);
+        daemon.state.push_run(run);
+        daemon.persist_and_publish_state().unwrap();
+    }
+
+    fn temp_state_dir(prefix: &str) -> String {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!("cid-{prefix}-{unique}"))
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn fingerprint(contents: &str) -> String {
+        let mut hasher = DefaultHasher::new();
+        contents.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
+
+    fn slugify_for_test(value: &str) -> String {
+        let mut slug = String::new();
+        let mut last_was_dash = false;
+
+        for character in value.chars() {
+            if character.is_ascii_alphanumeric() {
+                slug.push(character.to_ascii_lowercase());
+                last_was_dash = false;
+            } else if !last_was_dash {
+                slug.push('-');
+                last_was_dash = true;
+            }
+        }
+
+        slug.trim_matches('-').to_string()
     }
 }

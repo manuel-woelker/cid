@@ -264,6 +264,44 @@ Presentation code should be able to ask questions and send commands, but it shou
 Those boundaries keep the system understandable.
 They also make it possible to test the daemon without having every test depend on Docker, the web UI, and live Git state at the same time.
 
+# How should the daemon runtime be split internally?
+
+The daemon should stay the only mutable authority, but its internal runtime should be split by state transition rather than by broad component labels.
+
+The useful stages are:
+
+- repository/config sync
+- commit discovery
+- run planning
+- run dispatch
+- run execution
+- snapshot publication
+
+Those stages separate cheap control-plane work from slow external side effects.
+That matters because repository polling, retries, and queue maintenance should stay responsive even while a build is running.
+
+The most important handoff is:
+
+- `run queued` means planning has created runnable work
+- `run claimed for execution` means dispatch has handed that work to the executor
+
+In practice that means:
+
+- discovery may create queued runs, but it should not start builds directly
+- any action that creates runnable queued work should wake dispatch immediately
+- dispatch decides whether execution capacity is available
+- execution performs the slow side effects and reports completion back to the daemon
+- the daemon persists and republishes state after planning, dispatch, and execution transitions
+
+This is intentionally not a generic event bus.
+It is a pragmatic internal pipeline that keeps ownership obvious:
+
+- discovery finds facts
+- planning creates intended work
+- dispatch decides what starts now
+- execution performs the work
+- publication makes the latest daemon-owned snapshot visible
+
 # What should the first version avoid?
 
 The first version should avoid architecture that assumes a future distributed system.
