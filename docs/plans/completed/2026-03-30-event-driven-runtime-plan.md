@@ -334,8 +334,7 @@ Lower polling helps commit discovery latency, but it is not the right long-term 
 - [x] Add tests proving retries start without waiting for the next poll interval
 - [x] Add tests proving commit discovery continues while execution is busy
 - [x] Add tests for dispatcher claim behavior and no-double-start guarantees
-- [ ] ~~Add concurrency limit configuration and tests if that policy is introduced in scope~~
-  Deferred for now: `cid` should prefer a single executor by default to keep the runtime simple and avoid taking too many system resources from the user's machine.
+- [x] Keep execution single-worker by default to preserve runtime simplicity and avoid taking too many system resources from the user's machine
 - [x] Run `./scripts/check-code.sh`
 
 # How should this be verified?
