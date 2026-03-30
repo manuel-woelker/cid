@@ -1,14 +1,6 @@
 use std::sync::{Arc, RwLock, mpsc};
 use std::time::{Duration, Instant};
 
-use cid_base::logging::info;
-use cid_base::result::{CidResult, ResultExt};
-use cid_pal::pal::PalHandle;
-use cid_pal::process_command::ProcessCommand;
-use cid_pal::process_event::ProcessEvent;
-use cid_pal::process_event_sink::ProcessEventSink;
-use serde::{Deserialize, Serialize};
-use tracing::debug;
 use crate::config::CidConfig;
 use crate::persistence::CidStateStore;
 use crate::repository::{DiscoveredCommit, Repository};
@@ -16,6 +8,13 @@ use crate::run::{Run, RunSummary};
 use crate::runner::DockerRunner;
 use crate::scheduler::Scheduler;
 use crate::watcher::RepositoryWatcher;
+use cid_base::result::{CidResult, ResultExt};
+use cid_pal::pal::PalHandle;
+use cid_pal::process_command::ProcessCommand;
+use cid_pal::process_event::ProcessEvent;
+use cid_pal::process_event_sink::ProcessEventSink;
+use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 #[derive(Debug)]
 pub struct CidDaemon {
