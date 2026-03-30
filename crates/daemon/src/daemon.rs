@@ -8,7 +8,7 @@ use cid_pal::process_command::ProcessCommand;
 use cid_pal::process_event::ProcessEvent;
 use cid_pal::process_event_sink::ProcessEventSink;
 use serde::{Deserialize, Serialize};
-
+use tracing::debug;
 use crate::config::CidConfig;
 use crate::persistence::CidStateStore;
 use crate::repository::{DiscoveredCommit, Repository};
@@ -99,7 +99,7 @@ impl CidDaemon {
         loop {
             self.process_pending_commands()?;
             let report = self.run_cycle()?;
-            info!(
+            debug!(
                 repository_count = self.repositories().len(),
                 discovered_commits = report.discovered_commits,
                 queued_runs = report.queued_runs,
