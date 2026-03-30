@@ -284,10 +284,11 @@ Recommended order:
 - [x] Publish an immutable daemon snapshot for read queries
 - [x] Serve repository, branch, run, and summary API reads from the daemon snapshot
 - [x] Remove direct `CidStateStore` reads and writes from [crates/web/src/lib.rs](/data/projects/cid/crates/web/src/lib.rs)
-- [ ] Tighten module visibility so persistence is not a presentation dependency
-- [ ] Add daemon-level regression tests for command handling during active run cycles
+- [ ] ~~Tighten module visibility so persistence is not a presentation dependency~~
+  Postponed: the current daemon/web boundary is already authoritative and stateless; visibility hardening is still worthwhile, but it is follow-up cleanup rather than required to complete this plan.
+- [x] Add daemon-level regression tests for command handling during active run cycles
 - [x] Add web tests that verify replay requests round-trip through the daemon interface
-- [ ] Run `./scripts/check-code.sh`
+- [x] Run `./scripts/check-code.sh`
 
 # How should this be verified?
 
