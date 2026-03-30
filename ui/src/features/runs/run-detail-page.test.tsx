@@ -63,7 +63,7 @@ describe("RunDetailPage", () => {
       return new Response("not found", { status: 404 });
     });
 
-    await renderApp("/repositories/1/runs/7");
+    await renderApp("/repositories/cid/runs/7");
 
     await waitFor(() =>
       expect(screen.getByText("Run #7 · cid")).toBeInTheDocument(),
@@ -140,7 +140,7 @@ describe("RunDetailPage", () => {
       return new Response("not found", { status: 404 });
     });
 
-    await renderApp("/repositories/1/runs/7");
+    await renderApp("/repositories/cid/runs/7");
 
     await waitFor(() =>
       expect(screen.getByText("Run #7 · cid")).toBeInTheDocument(),
@@ -196,7 +196,7 @@ describe("RunDetailPage", () => {
       return new Response("not found", { status: 404 });
     });
 
-    await renderApp("/repositories/1/runs/7");
+    await renderApp("/repositories/cid/runs/7");
 
     await waitFor(() =>
       expect(screen.getByText("Run #7 · cid")).toBeInTheDocument(),
@@ -323,7 +323,7 @@ describe("RunDetailPage", () => {
       return new Response("not found", { status: 404 });
     });
 
-    await renderApp("/repositories/1/runs/7");
+    await renderApp("/repositories/cid/runs/7");
 
     await waitFor(() =>
       expect(screen.getByText("Run #7 · cid")).toBeInTheDocument(),

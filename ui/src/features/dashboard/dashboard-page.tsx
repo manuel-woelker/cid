@@ -160,8 +160,8 @@ export function DashboardPage() {
                     className="repository-card"
                     title={
                       <Link
-                        to="/repositories/$repositoryId"
-                        params={{ repositoryId: String(repository.id) }}
+                        to="/repositories/$repositoryName"
+                        params={{ repositoryName: repository.name }}
                       >
                         {repository.name}
                       </Link>
@@ -174,9 +174,9 @@ export function DashboardPage() {
                       {repository.branch_rules.map((rule) => (
                         <Link
                           key={rule.branch}
-                          to="/repositories/$repositoryId/branches/$branchName"
+                          to="/repositories/$repositoryName/branches/$branchName"
                           params={{
-                            repositoryId: String(repository.id),
+                            repositoryName: repository.name,
                             branchName: rule.branch,
                           }}
                         >
@@ -219,9 +219,9 @@ export function DashboardPage() {
                   render: (_, run) => (
                     <Space direction="vertical" size={0}>
                       <Link
-                        to="/repositories/$repositoryId/runs/$runId"
+                        to="/repositories/$repositoryName/runs/$runId"
                         params={{
-                          repositoryId: String(run.repository_id),
+                          repositoryName: run.repository_name,
                           runId: String(run.id),
                         }}
                       >
@@ -258,7 +258,7 @@ export function DashboardPage() {
                   key: "actions",
                   render: (_, run) => (
                     <ReplayRunButton
-                      repositoryId={run.repository_id}
+                      repositoryName={run.repository_name}
                       runId={run.id}
                       size="small"
                       onError={setError}

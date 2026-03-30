@@ -41,16 +41,16 @@ function breadcrumbItems(pathname: string) {
   const items: Array<{ title: string; href?: string }> = [
     { title: "Dashboard", href: "/" },
   ];
-  const repositoryId = segments[1];
+  const repositoryName = segments[1];
 
-  if (!repositoryId) {
+  if (!repositoryName) {
     items.push({ title: "Repositories" });
     return items;
   }
 
   items.push({
-    title: `Repository ${repositoryId}`,
-    href: `/repositories/${repositoryId}`,
+    title: decodePathSegment(repositoryName),
+    href: `/repositories/${repositoryName}`,
   });
 
   if (segments[2] === "branches" && segments[3]) {
@@ -76,7 +76,7 @@ function RootLayout() {
     repositories: [],
     activeBranches: [],
   });
-  const activeRepositoryId = useMemo(() => {
+  const activeRepositoryName = useMemo(() => {
     const segments = pathname.split("/").filter(Boolean);
     return segments[0] === "repositories" ? (segments[1] ?? null) : null;
   }, [pathname]);
@@ -115,7 +115,7 @@ function RootLayout() {
   }, []);
 
   useEffect(() => {
-    if (!activeRepositoryId) {
+    if (!activeRepositoryName) {
       setNavigationState((currentState) => ({
         ...currentState,
         activeBranches: [],
@@ -123,12 +123,14 @@ function RootLayout() {
       return;
     }
 
-    const repositoryId = activeRepositoryId;
+    const repositoryName = activeRepositoryName;
     let isMounted = true;
 
     async function loadBranches() {
       try {
-        const activeBranches = await getRepositoryBranches(repositoryId);
+        const activeBranches = await getRepositoryBranches(
+          decodePathSegment(repositoryName),
+        );
         if (!isMounted) {
           return;
         }
@@ -154,7 +156,7 @@ function RootLayout() {
     return () => {
       isMounted = false;
     };
-  }, [activeRepositoryId]);
+  }, [activeRepositoryName]);
 
   return (
     <AppProviders>
@@ -213,13 +215,14 @@ function RootLayout() {
               <nav className="app-tree">
                 {navigationState.repositories.map((repository) => {
                   const isActiveRepository =
-                    String(repository.id) === activeRepositoryId;
+                    encodeURIComponent(repository.name) ===
+                    activeRepositoryName;
 
                   return (
                     <div key={repository.id} className="app-tree-group">
                       <Link
-                        to="/repositories/$repositoryId"
-                        params={{ repositoryId: String(repository.id) }}
+                        to="/repositories/$repositoryName"
+                        params={{ repositoryName: repository.name }}
                         className={
                           isActiveRepository
                             ? "app-tree-link app-tree-link-active"
@@ -233,14 +236,14 @@ function RootLayout() {
                           {navigationState.activeBranches.map((branch) => (
                             <Link
                               key={branch.branch_name}
-                              to="/repositories/$repositoryId/branches/$branchName"
+                              to="/repositories/$repositoryName/branches/$branchName"
                               params={{
-                                repositoryId: String(repository.id),
+                                repositoryName: repository.name,
                                 branchName: branch.branch_name,
                               }}
                               className={
                                 pathname ===
-                                `/repositories/${repository.id}/branches/${encodeURIComponent(branch.branch_name)}`
+                                `/repositories/${encodeURIComponent(repository.name)}/branches/${encodeURIComponent(branch.branch_name)}`
                                   ? "app-tree-link app-tree-link-branch app-tree-link-active"
                                   : "app-tree-link app-tree-link-branch"
                               }

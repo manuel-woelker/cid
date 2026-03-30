@@ -18,8 +18,8 @@ import { formatTimestamp, shortCommit } from "../../lib/time";
 import { ReplayRunButton } from "../runs/replay-run-button";
 
 export function BranchPage() {
-  const { repositoryId, branchName } = useParams({
-    from: "/repositories/$repositoryId/branches/$branchName",
+  const { repositoryName, branchName } = useParams({
+    from: "/repositories/$repositoryName/branches/$branchName",
   });
   const [detail, setDetail] = useState<BranchDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -33,7 +33,10 @@ export function BranchPage() {
       setError(null);
 
       try {
-        const nextDetail = await getRepositoryBranch(repositoryId, branchName);
+        const nextDetail = await getRepositoryBranch(
+          repositoryName,
+          branchName,
+        );
         if (isMounted) {
           setDetail(nextDetail);
         }
@@ -57,7 +60,7 @@ export function BranchPage() {
     return () => {
       isMounted = false;
     };
-  }, [repositoryId, branchName]);
+  }, [repositoryName, branchName]);
 
   if (error) {
     return (
@@ -82,8 +85,8 @@ export function BranchPage() {
             <Space direction="vertical" size={0}>
               <Typography.Text type="secondary">
                 <Link
-                  to="/repositories/$repositoryId"
-                  params={{ repositoryId: String(detail.repository.id) }}
+                  to="/repositories/$repositoryName"
+                  params={{ repositoryName: detail.repository.name }}
                 >
                   {detail.repository.name}
                 </Link>
@@ -130,9 +133,9 @@ export function BranchPage() {
                 key: "run",
                 render: (_, run) => (
                   <Link
-                    to="/repositories/$repositoryId/runs/$runId"
+                    to="/repositories/$repositoryName/runs/$runId"
                     params={{
-                      repositoryId: String(run.repository_id),
+                      repositoryName: run.repository_name,
                       runId: String(run.id),
                     }}
                   >
@@ -170,7 +173,7 @@ export function BranchPage() {
                 key: "actions",
                 render: (_, run) => (
                   <ReplayRunButton
-                    repositoryId={run.repository_id}
+                    repositoryName={run.repository_name}
                     runId={run.id}
                     size="small"
                     onError={setError}

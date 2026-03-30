@@ -5,14 +5,14 @@ import { useNavigate } from "@tanstack/react-router";
 import { replayRun } from "../../lib/api/client";
 
 interface ReplayRunButtonProps {
-  repositoryId: number | string;
+  repositoryName: string;
   runId: number | string;
   size?: "small" | "middle" | "large";
   onError?: (message: string) => void;
 }
 
 export function ReplayRunButton({
-  repositoryId,
+  repositoryName,
   runId,
   size = "middle",
   onError,
@@ -26,9 +26,9 @@ export function ReplayRunButton({
     try {
       const replayedRun = await replayRun(String(runId));
       await navigate({
-        to: "/repositories/$repositoryId/runs/$runId",
+        to: "/repositories/$repositoryName/runs/$runId",
         params: {
-          repositoryId: String(repositoryId),
+          repositoryName,
           runId: String(replayedRun.id),
         },
       });

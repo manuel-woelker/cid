@@ -14,19 +14,19 @@ const dashboardRoute = createRoute({
 
 const runDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/repositories/$repositoryId/runs/$runId",
+  path: "/repositories/$repositoryName/runs/$runId",
   component: RunDetailPage,
 });
 
 const repositoryRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/repositories/$repositoryId",
+  path: "/repositories/$repositoryName",
   component: RepositoryPage,
 });
 
 const branchRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/repositories/$repositoryId/branches/$branchName",
+  path: "/repositories/$repositoryName/branches/$branchName",
   component: BranchPage,
 });
 

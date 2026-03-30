@@ -22,7 +22,9 @@ interface RepositoryPageState {
 }
 
 export function RepositoryPage() {
-  const { repositoryId } = useParams({ from: "/repositories/$repositoryId" });
+  const { repositoryName } = useParams({
+    from: "/repositories/$repositoryName",
+  });
   const [state, setState] = useState<RepositoryPageState>({
     repository: null,
     branches: [],
@@ -39,8 +41,8 @@ export function RepositoryPage() {
 
       try {
         const [repository, branches] = await Promise.all([
-          getRepository(repositoryId),
-          getRepositoryBranches(repositoryId),
+          getRepository(repositoryName),
+          getRepositoryBranches(repositoryName),
         ]);
 
         if (isMounted) {
@@ -66,7 +68,7 @@ export function RepositoryPage() {
     return () => {
       isMounted = false;
     };
-  }, [repositoryId]);
+  }, [repositoryName]);
 
   if (error) {
     return (
@@ -80,7 +82,9 @@ export function RepositoryPage() {
   }
 
   if (!isLoading && !state.repository) {
-    return <Empty description={`Repository ${repositoryId} was not found.`} />;
+    return (
+      <Empty description={`Repository ${repositoryName} was not found.`} />
+    );
   }
 
   return (
@@ -133,9 +137,9 @@ export function RepositoryPage() {
                 key: "branch",
                 render: (_, branch) => (
                   <Link
-                    to="/repositories/$repositoryId/branches/$branchName"
+                    to="/repositories/$repositoryName/branches/$branchName"
                     params={{
-                      repositoryId,
+                      repositoryName,
                       branchName: branch.branch_name,
                     }}
                   >

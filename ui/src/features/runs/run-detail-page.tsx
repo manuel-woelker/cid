@@ -31,8 +31,8 @@ function findLastStepWithLog(run: Run): number {
 }
 
 export function RunDetailPage() {
-  const { repositoryId, runId } = useParams({
-    from: "/repositories/$repositoryId/runs/$runId",
+  const { repositoryName, runId } = useParams({
+    from: "/repositories/$repositoryName/runs/$runId",
   });
   const [run, setRun] = useState<Run | null>(null);
   const [selectedStepIndex, setSelectedStepIndex] = useState<number>(0);
@@ -172,7 +172,7 @@ export function RunDetailPage() {
                 </div>
                 <Flex align="center" gap={12}>
                   <ReplayRunButton
-                    repositoryId={repositoryId}
+                    repositoryName={repositoryName}
                     runId={runId}
                     onError={setError}
                   />

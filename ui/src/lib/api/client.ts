@@ -53,24 +53,28 @@ export async function getRepositories(): Promise<Repository[]> {
   return requestJson<Repository[]>("/api/repositories");
 }
 
-export async function getRepository(repositoryId: string): Promise<Repository> {
-  return requestJson<Repository>(`/api/repositories/${repositoryId}`);
+export async function getRepository(
+  repositoryName: string,
+): Promise<Repository> {
+  return requestJson<Repository>(
+    `/api/repositories/${encodeURIComponent(repositoryName)}`,
+  );
 }
 
 export async function getRepositoryBranches(
-  repositoryId: string,
+  repositoryName: string,
 ): Promise<BranchSummary[]> {
   return requestJson<BranchSummary[]>(
-    `/api/repositories/${repositoryId}/branches`,
+    `/api/repositories/${encodeURIComponent(repositoryName)}/branches`,
   );
 }
 
 export async function getRepositoryBranch(
-  repositoryId: string,
+  repositoryName: string,
   branchName: string,
 ): Promise<BranchDetail> {
   return requestJson<BranchDetail>(
-    `/api/repositories/${repositoryId}/branches/${encodeURIComponent(branchName)}`,
+    `/api/repositories/${encodeURIComponent(repositoryName)}/branches/${encodeURIComponent(branchName)}`,
   );
 }
 

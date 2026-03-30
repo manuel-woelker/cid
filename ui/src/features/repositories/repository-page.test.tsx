@@ -19,7 +19,7 @@ describe("RepositoryPage", () => {
     fetchMock.mockImplementation(async (input) => {
       const url = String(input);
 
-      if (url === "/api/repositories/1") {
+      if (url === "/api/repositories/cid") {
         return new Response(
           JSON.stringify({
             id: 1,
@@ -32,7 +32,7 @@ describe("RepositoryPage", () => {
         );
       }
 
-      if (url === "/api/repositories/1/branches") {
+      if (url === "/api/repositories/cid/branches") {
         return new Response(
           JSON.stringify([
             {
@@ -60,9 +60,13 @@ describe("RepositoryPage", () => {
       return new Response("not found", { status: 404 });
     });
 
-    await renderApp("/repositories/1");
+    await renderApp("/repositories/cid");
 
-    await waitFor(() => expect(screen.getByText("cid")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { level: 2, name: "cid" }),
+      ).toBeInTheDocument(),
+    );
 
     const branchLinks = screen.getAllByRole("link", { name: /main|release/ });
     expect(branchLinks[0]).toHaveTextContent("main");

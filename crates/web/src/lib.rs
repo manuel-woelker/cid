@@ -59,16 +59,16 @@ fn route_request(
             let state = store.load()?;
             json_response(state.repositories())
         }
-        ("GET", ["api", "repositories", repository_id]) => {
+        ("GET", ["api", "repositories", repository_name]) => {
             let state = store.load()?;
-            match find_repository(&state, repository_id.parse::<u64>().ok()) {
+            match find_repository(&state, repository_name)? {
                 Some(repository) => json_response(repository),
                 None => Ok(text_response("404 Not Found", "repository not found")),
             }
         }
-        ("GET", ["api", "repositories", repository_id, "branches"]) => {
+        ("GET", ["api", "repositories", repository_name, "branches"]) => {
             let state = store.load()?;
-            match find_repository(&state, repository_id.parse::<u64>().ok()) {
+            match find_repository(&state, repository_name)? {
                 Some(repository) => json_response(&branch_summaries(&state, repository)),
                 None => Ok(text_response("404 Not Found", "repository not found")),
             }
@@ -78,13 +78,13 @@ fn route_request(
             [
                 "api",
                 "repositories",
-                repository_id,
+                repository_name,
                 "branches",
                 branch_name,
             ],
         ) => {
             let state = store.load()?;
-            match find_repository(&state, repository_id.parse::<u64>().ok()) {
+            match find_repository(&state, repository_name)? {
                 Some(repository) => {
                     let branch_name = decode_path_segment(branch_name)?;
                     match branch_detail(&state, repository, &branch_name) {
@@ -134,7 +134,11 @@ fn replay_run_response(store: &CidStateStore, run_id: &str) -> CidResult<HttpRes
     let Some(source_run) = find_run(&state, Some(run_id)).cloned() else {
         return Ok(text_response("404 Not Found", "run not found"));
     };
-    let Some(repository) = find_repository(&state, Some(source_run.repository_id())).cloned()
+    let Some(repository) = state
+        .repositories()
+        .iter()
+        .find(|repository| repository.id() == source_run.repository_id())
+        .cloned()
     else {
         return Ok(text_response("404 Not Found", "repository not found"));
     };
@@ -276,12 +280,15 @@ fn api_path_segments(path: &str) -> Vec<&str> {
         .collect()
 }
 
-fn find_repository(state: &DaemonState, repository_id: Option<u64>) -> Option<&Repository> {
-    let repository_id = repository_id?;
-    state
-        .repositories()
-        .iter()
-        .find(|repository| repository.id() == repository_id)
+fn find_repository<'a>(
+    state: &'a DaemonState,
+    repository_name: &str,
+) -> CidResult<Option<&'a Repository>> {
+    let repository_name = decode_path_segment(repository_name)?;
+
+    Ok(state.repositories().iter().find(|repository| {
+        repository.name() == repository_name || repository.id().to_string() == repository_name
+    }))
 }
 
 fn find_run(state: &DaemonState, run_id: Option<u64>) -> Option<&Run> {
@@ -618,7 +625,7 @@ mod tests {
         let store = sample_store(&pal);
         let response = route_request(
             "GET",
-            "/api/repositories/1/branches",
+            "/api/repositories/cid/branches",
             &store,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
         )
@@ -642,7 +649,7 @@ mod tests {
         let store = sample_store(&pal);
         let response = route_request(
             "GET",
-            "/api/repositories/1/branches/feature%2Fbeta",
+            "/api/repositories/cid/branches/feature%2Fbeta",
             &store,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
         )

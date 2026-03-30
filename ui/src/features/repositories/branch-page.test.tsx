@@ -19,7 +19,7 @@ describe("BranchPage", () => {
     fetchMock.mockImplementation(async (input) => {
       const url = String(input);
 
-      if (url === "/api/repositories/1/branches/feature%2Fbeta") {
+      if (url === "/api/repositories/cid/branches/feature%2Fbeta") {
         return new Response(
           JSON.stringify({
             repository: {
@@ -65,7 +65,7 @@ describe("BranchPage", () => {
       return new Response("not found", { status: 404 });
     });
 
-    await renderApp("/repositories/1/branches/feature%2Fbeta");
+    await renderApp("/repositories/cid/branches/feature%2Fbeta");
 
     await waitFor(() =>
       expect(screen.getByText("feature/beta")).toBeInTheDocument(),
