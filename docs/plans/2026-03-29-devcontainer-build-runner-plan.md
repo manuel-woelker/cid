@@ -254,19 +254,19 @@ Recommended order:
 # How should this work be tracked?
 
 - [ ] Document the new repository execution contract in prose documentation
-- [ ] Replace or adapt the repository execution data model in [`crates/daemon/src/repository.rs`](/data/projects/cid/crates/daemon/src/repository.rs)
-- [ ] Update config loading and validation in [`crates/daemon/src/config.rs`](/data/projects/cid/crates/daemon/src/config.rs) to require `.devcontainer` and `scripts/ci.sh`
-- [ ] Add startup validation that runs `devcontainer --version` and fails clearly if the CLI is unavailable
-- [ ] Add a runner helper that resolves devcontainer inputs and computes a stable build fingerprint
-- [ ] Add a runner helper that derives a stable cache identity from repository identity plus fingerprint
-- [ ] Add runner logic that builds the devcontainer environment through the Dev Container CLI before CI execution
-- [ ] Add runner logic that executes `scripts/ci.sh` through the Dev Container CLI
+- [x] Replace or adapt the repository execution data model in [`crates/daemon/src/repository.rs`](/data/projects/cid/crates/daemon/src/repository.rs)
+- [x] Update config loading and validation in [`crates/daemon/src/config.rs`](/data/projects/cid/crates/daemon/src/config.rs) to require `.devcontainer` and `scripts/ci.sh`
+- [x] Add startup validation that runs `devcontainer --version` and fails clearly if the CLI is unavailable
+- [x] Add a runner helper that resolves devcontainer inputs and computes a stable build fingerprint
+- [x] Add a runner helper that derives a stable cache identity from repository identity plus fingerprint
+- [x] Add runner logic that builds the devcontainer environment through the Dev Container CLI before CI execution
+- [x] Add runner logic that executes `scripts/ci.sh` through the Dev Container CLI
 - [ ] Decide how artifact retention should work once step-level pipeline commands are removed
 - [ ] Update persistence in [`crates/daemon/src/persistence.rs`](/data/projects/cid/crates/daemon/src/persistence.rs) if run-phase metadata changes
-- [ ] Add or update colocated tests for config validation failures and success cases
-- [ ] Add or update runner tests for `devcontainer --version`, devcontainer build command generation, and CI execution command generation
+- [x] Add or update colocated tests for config validation failures and success cases
+- [x] Add or update runner tests for `devcontainer --version`, devcontainer build command generation, and CI execution command generation
 - [ ] Add an end-to-end sandbox-style fixture that proves `cid` can build a devcontainer and run `scripts/ci.sh`
-- [ ] Run `./scripts/check-code.sh`
+- [x] Run `./scripts/check-code.sh`
 
 # How should the work be verified?
 
