@@ -196,6 +196,19 @@ Likely API concerns:
 The API should read mostly from persisted local state instead of depending on fragile in-memory-only views.
 That keeps restart behavior sane and avoids a weird split between "live" and "historical" data models.
 
+For live runtime behavior, the daemon should still be the only mutable authority.
+The web layer should be stateless presentation code:
+
+- it should translate HTTP requests into daemon queries or commands
+- it should not mutate persisted state directly
+- it should not maintain its own mutable runtime model
+
+That keeps the product's ownership model boring:
+
+- the daemon owns live state
+- persistence provides recovery and durability
+- the web layer presents daemon-owned state
+
 # How should the web UI fit into the system?
 
 The UI is an operational surface, not decoration.
@@ -241,6 +254,12 @@ The important boundaries are:
 - scheduling versus execution
 - execution versus persistence
 - persistence versus presentation
+
+One more boundary matters in practice:
+
+- daemon authority versus presentation access
+
+Presentation code should be able to ask questions and send commands, but it should not become a second writer of runtime state.
 
 Those boundaries keep the system understandable.
 They also make it possible to test the daemon without having every test depend on Docker, the web UI, and live Git state at the same time.

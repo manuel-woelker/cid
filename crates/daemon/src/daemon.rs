@@ -1,3 +1,6 @@
+use std::sync::{Arc, RwLock, mpsc};
+use std::time::{Duration, Instant};
+
 use cid_base::logging::info;
 use cid_base::result::{CidResult, ResultExt};
 use cid_pal::pal::PalHandle;
@@ -23,6 +26,9 @@ pub struct CidDaemon {
     scheduler: Scheduler,
     runner: DockerRunner,
     state: DaemonState,
+    snapshot: Arc<RwLock<DaemonState>>,
+    command_sender: mpsc::Sender<DaemonCommand>,
+    command_receiver: mpsc::Receiver<DaemonCommand>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -39,6 +45,24 @@ pub struct RunCycleReport {
     pub executed_runs: usize,
 }
 
+#[derive(Clone)]
+pub struct DaemonHandle {
+    snapshot: Arc<RwLock<DaemonState>>,
+    command_sender: mpsc::Sender<DaemonCommand>,
+}
+
+pub trait DaemonApi {
+    fn snapshot(&self) -> CidResult<DaemonState>;
+    fn replay_run(&self, run_id: u64) -> CidResult<Run>;
+}
+
+enum DaemonCommand {
+    ReplayRun {
+        run_id: u64,
+        response_sender: mpsc::Sender<CidResult<Run>>,
+    },
+}
+
 impl CidDaemon {
     pub fn from_config(config: &CidConfig, pal: PalHandle) -> CidResult<Self> {
         ensure_devcontainer_cli_available(&*pal)?;
@@ -47,6 +71,8 @@ impl CidDaemon {
         let repositories = config.repositories(&*pal)?;
         sync_repositories(&mut state, repositories);
         store.save(&state)?;
+        let snapshot = Arc::new(RwLock::new(state.clone()));
+        let (command_sender, command_receiver) = mpsc::channel();
 
         Ok(Self {
             config: config.clone(),
@@ -56,11 +82,22 @@ impl CidDaemon {
             pal,
             store,
             state,
+            snapshot,
+            command_sender,
+            command_receiver,
         })
+    }
+
+    pub fn handle(&self) -> DaemonHandle {
+        DaemonHandle {
+            snapshot: Arc::clone(&self.snapshot),
+            command_sender: self.command_sender.clone(),
+        }
     }
 
     pub fn run_forever(&mut self, poll_interval: std::time::Duration) -> CidResult<()> {
         loop {
+            self.process_pending_commands()?;
             let report = self.run_cycle()?;
             info!(
                 repository_count = self.repositories().len(),
@@ -69,7 +106,7 @@ impl CidDaemon {
                 executed_runs = report.executed_runs,
                 "daemon cycle completed"
             );
-            self.sleep(poll_interval);
+            self.wait_for_next_cycle(poll_interval)?;
         }
     }
 
@@ -114,6 +151,8 @@ impl CidDaemon {
             .execute_queued_runs(&self.state.repositories, &mut self.state.runs)?;
         self.reload_externally_added_runs()?;
         self.store.save(&self.state)?;
+        self.publish_snapshot()?;
+        self.process_pending_commands()?;
 
         Ok(RunCycleReport {
             discovered_commits: discovered_count,
@@ -138,6 +177,75 @@ impl CidDaemon {
         let persisted_state = self.store.load()?;
         merge_missing_runs(&mut self.state, persisted_state.runs);
         Ok(())
+    }
+
+    fn publish_snapshot(&self) -> CidResult<()> {
+        let mut snapshot = self
+            .snapshot
+            .write()
+            .map_err(|_| cid_base::err!("daemon snapshot lock is poisoned"))?;
+        *snapshot = self.state.clone();
+        Ok(())
+    }
+
+    fn process_pending_commands(&mut self) -> CidResult<()> {
+        while let Ok(command) = self.command_receiver.try_recv() {
+            self.handle_command(command)?;
+        }
+
+        Ok(())
+    }
+
+    fn wait_for_next_cycle(&mut self, duration: Duration) -> CidResult<()> {
+        let deadline = Instant::now() + duration;
+
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(());
+            }
+
+            let timeout = (deadline - now).min(Duration::from_millis(100));
+            match self.command_receiver.recv_timeout(timeout) {
+                Ok(command) => self.handle_command(command)?,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            }
+        }
+    }
+
+    fn handle_command(&mut self, command: DaemonCommand) -> CidResult<()> {
+        match command {
+            DaemonCommand::ReplayRun {
+                run_id,
+                response_sender,
+            } => {
+                let _ = response_sender.send(self.replay_run(run_id));
+                Ok(())
+            }
+        }
+    }
+
+    fn replay_run(&mut self, run_id: u64) -> CidResult<Run> {
+        let Some(source_run) = find_run(&self.state, run_id).cloned() else {
+            return Err(cid_base::err!("run not found"));
+        };
+        let Some(repository) = self
+            .state
+            .repositories()
+            .iter()
+            .find(|repository| repository.id() == source_run.repository_id())
+            .cloned()
+        else {
+            return Err(cid_base::err!("repository not found"));
+        };
+
+        let next_run = replay_run_from_source(&self.state, &repository, &source_run, self.now_ms());
+        self.state.push_run(next_run.clone());
+        self.store.save(&self.state)?;
+        self.publish_snapshot()?;
+
+        Ok(next_run)
     }
 }
 
@@ -201,6 +309,28 @@ impl DaemonState {
     }
 }
 
+impl DaemonApi for DaemonHandle {
+    fn snapshot(&self) -> CidResult<DaemonState> {
+        self.snapshot
+            .read()
+            .map(|snapshot| snapshot.clone())
+            .map_err(|_| cid_base::err!("daemon snapshot lock is poisoned"))
+    }
+
+    fn replay_run(&self, run_id: u64) -> CidResult<Run> {
+        let (response_sender, response_receiver) = mpsc::channel();
+        self.command_sender
+            .send(DaemonCommand::ReplayRun {
+                run_id,
+                response_sender,
+            })
+            .map_err(|_| cid_base::err!("daemon command channel is closed"))?;
+        response_receiver
+            .recv()
+            .map_err(|_| cid_base::err!("daemon command response channel is closed"))?
+    }
+}
+
 fn sync_repositories(state: &mut DaemonState, repositories: Vec<Repository>) {
     let previous_repositories = state.repositories.clone();
     let mut next_repositories = repositories;
@@ -223,6 +353,10 @@ fn sync_repositories(state: &mut DaemonState, repositories: Vec<Repository>) {
     state.repositories = next_repositories;
 }
 
+fn find_run(state: &DaemonState, run_id: u64) -> Option<&Run> {
+    state.runs().iter().find(|run| run.id() == run_id)
+}
+
 fn merge_missing_runs(state: &mut DaemonState, runs: Vec<Run>) {
     for run in runs {
         if state.runs.iter().any(|existing| existing.id() == run.id()) {
@@ -233,6 +367,37 @@ fn merge_missing_runs(state: &mut DaemonState, runs: Vec<Run>) {
     }
 
     state.runs.sort_by_key(Run::id);
+}
+
+fn replay_run_from_source(
+    state: &DaemonState,
+    repository: &Repository,
+    source_run: &Run,
+    queued_at_ms: u64,
+) -> Run {
+    let next_run_id = state.runs().iter().map(Run::id).max().unwrap_or(0) + 1;
+
+    Run::new(
+        next_run_id,
+        source_run.repository_id(),
+        source_run.repository_name(),
+        source_run.branch(),
+        source_run.commit_sha(),
+        queued_at_ms,
+        repository
+            .pipeline()
+            .steps()
+            .iter()
+            .map(|step| {
+                crate::run::RunStep::new(
+                    step.name(),
+                    step.command(),
+                    repository.pipeline().image(),
+                    repository.pipeline().artifact_paths().to_vec(),
+                )
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

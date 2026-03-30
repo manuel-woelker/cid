@@ -9,7 +9,7 @@ pub mod scheduler;
 pub mod watcher;
 
 pub use config::{CidConfig, WebConfig};
-pub use daemon::{CidDaemon, DaemonState, RunCycleReport};
+pub use daemon::{CidDaemon, DaemonApi, DaemonHandle, DaemonState, RunCycleReport};
 pub use persistence::CidStateStore;
 pub use repository::{
     BranchRule, DiscoveredCommit, Pipeline, PipelineStep, Repository, RepositoryStatus,

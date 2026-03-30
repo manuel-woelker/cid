@@ -19,10 +19,10 @@ fn run() -> CidResult<()> {
 
     if config.web().enabled() {
         let address = config.web().address().to_string();
-        let state_dir = config.state_dir().clone();
+        let daemon_handle = daemon.handle();
         let web_pal = pal.clone();
         thread::spawn(move || {
-            if let Err(error) = cid_web::serve(&address, state_dir, web_pal) {
+            if let Err(error) = cid_web::serve(&address, daemon_handle, web_pal) {
                 error!(error = %error.to_test_string(), "web server exited with an error");
             }
         });

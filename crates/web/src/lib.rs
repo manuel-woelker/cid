@@ -8,28 +8,31 @@ use std::net::{TcpListener, TcpStream};
 use asset_source::AssetSource;
 use cid_base::file_path::FilePath;
 use cid_base::result::{CidResult, ResultExt};
-use cid_daemon::{CidStateStore, DaemonState, Repository, Run, RunStatus, RunSummary};
+use cid_daemon::{DaemonApi, DaemonState, Repository, Run, RunStatus, RunSummary};
 use serde::Serialize;
 
 const UI_DIST_DIR: &str = "ui/dist";
 
-pub fn serve(address: &str, state_dir: FilePath, pal: cid_pal::pal::PalHandle) -> CidResult<()> {
+pub fn serve<D: DaemonApi>(
+    address: &str,
+    daemon: D,
+    pal: cid_pal::pal::PalHandle,
+) -> CidResult<()> {
     let listener = TcpListener::bind(address)
         .with_context(|| format!("failed to bind web server to `{address}`"))?;
-    let store = CidStateStore::new(state_dir);
     let asset_source = AssetSource::load(pal, FilePath::new(UI_DIST_DIR))?;
 
     for stream in listener.incoming() {
         let mut stream = stream.context("failed to accept web connection")?;
-        handle_connection(&mut stream, &store, &asset_source)?;
+        handle_connection(&mut stream, &daemon, &asset_source)?;
     }
 
     Ok(())
 }
 
-fn handle_connection(
+fn handle_connection<D: DaemonApi>(
     stream: &mut TcpStream,
-    store: &CidStateStore,
+    daemon: &D,
     asset_source: &AssetSource,
 ) -> CidResult<()> {
     let mut buffer = [0; 4096];
@@ -40,14 +43,14 @@ fn handle_connection(
     let method = request_method(&request);
     let path = request_path(&request);
 
-    let response = route_request(method, path, store, asset_source)?;
+    let response = route_request(method, path, daemon, asset_source)?;
     write_response(stream, &response)
 }
 
-fn route_request(
+fn route_request<D: DaemonApi>(
     method: &str,
     path: &str,
-    store: &CidStateStore,
+    daemon: &D,
     asset_source: &AssetSource,
 ) -> CidResult<HttpResponse> {
     if !path.starts_with("/api/") {
@@ -55,19 +58,16 @@ fn route_request(
     }
 
     match (method, api_path_segments(path).as_slice()) {
-        ("GET", ["api", "repositories"]) => {
-            let state = store.load()?;
-            json_response(state.repositories())
-        }
+        ("GET", ["api", "repositories"]) => json_response(daemon.snapshot()?.repositories()),
         ("GET", ["api", "repositories", repository_name]) => {
-            let state = store.load()?;
+            let state = daemon.snapshot()?;
             match find_repository(&state, repository_name)? {
                 Some(repository) => json_response(repository),
                 None => Ok(text_response("404 Not Found", "repository not found")),
             }
         }
         ("GET", ["api", "repositories", repository_name, "branches"]) => {
-            let state = store.load()?;
+            let state = daemon.snapshot()?;
             match find_repository(&state, repository_name)? {
                 Some(repository) => json_response(&branch_summaries(&state, repository)),
                 None => Ok(text_response("404 Not Found", "repository not found")),
@@ -83,7 +83,7 @@ fn route_request(
                 branch_name,
             ],
         ) => {
-            let state = store.load()?;
+            let state = daemon.snapshot()?;
             match find_repository(&state, repository_name)? {
                 Some(repository) => {
                     let branch_name = decode_path_segment(branch_name)?;
@@ -95,20 +95,17 @@ fn route_request(
                 None => Ok(text_response("404 Not Found", "repository not found")),
             }
         }
-        ("GET", ["api", "runs"]) => {
-            let state = store.load()?;
-            json_response(state.runs())
-        }
+        ("GET", ["api", "runs"]) => json_response(daemon.snapshot()?.runs()),
         ("GET", ["api", "runs", run_id]) => {
-            let state = store.load()?;
+            let state = daemon.snapshot()?;
             match find_run(&state, run_id.parse::<u64>().ok()) {
                 Some(run) => json_response(run),
                 None => Ok(text_response("404 Not Found", "run not found")),
             }
         }
-        ("POST", ["api", "runs", run_id, "replay"]) => replay_run_response(store, run_id),
+        ("POST", ["api", "runs", run_id, "replay"]) => replay_run_response(daemon, run_id),
         ("GET", ["api", "runs", run_id, "steps", step_index, "log"]) => {
-            let state = store.load()?;
+            let state = daemon.snapshot()?;
             match find_run(&state, run_id.parse::<u64>().ok()) {
                 Some(run) => match step_log_response(run, step_index.parse::<usize>().ok())? {
                     Some(response) => Ok(response),
@@ -118,69 +115,29 @@ fn route_request(
             }
         }
         ("GET", ["api", "summary"]) => {
-            let state = store.load()?;
-            json_response(&RunSummary::from_runs(state.runs()))
+            json_response(&RunSummary::from_runs(daemon.snapshot()?.runs()))
         }
         _ => Ok(text_response("404 Not Found", "not found")),
     }
 }
 
-fn replay_run_response(store: &CidStateStore, run_id: &str) -> CidResult<HttpResponse> {
+fn replay_run_response<D: DaemonApi>(daemon: &D, run_id: &str) -> CidResult<HttpResponse> {
     let Some(run_id) = run_id.parse::<u64>().ok() else {
         return Ok(text_response("404 Not Found", "run not found"));
     };
 
-    let mut state = store.load()?;
-    let Some(source_run) = find_run(&state, Some(run_id)).cloned() else {
-        return Ok(text_response("404 Not Found", "run not found"));
+    let next_run = match daemon.replay_run(run_id) {
+        Ok(run) => run,
+        Err(error) if error.to_test_string().contains("not found") => {
+            return Ok(text_response("404 Not Found", "run not found"));
+        }
+        Err(error) => return Err(error),
     };
-    let Some(repository) = state
-        .repositories()
-        .iter()
-        .find(|repository| repository.id() == source_run.repository_id())
-        .cloned()
-    else {
-        return Ok(text_response("404 Not Found", "repository not found"));
-    };
-
-    let next_run = replay_run(&state, &repository, &source_run)?;
-    state.push_run(next_run.clone());
-    store.save(&state)?;
 
     Ok(HttpResponse::new(
         "201 Created",
         "application/json; charset=utf-8",
         serde_json::to_vec_pretty(&next_run).context("failed to serialize replayed run")?,
-    ))
-}
-
-fn replay_run(state: &DaemonState, repository: &Repository, source_run: &Run) -> CidResult<Run> {
-    let next_run_id = state.runs().iter().map(Run::id).max().unwrap_or(0) + 1;
-    let queued_at_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .context("system clock is before unix epoch")?
-        .as_millis() as u64;
-
-    Ok(Run::new(
-        next_run_id,
-        source_run.repository_id(),
-        source_run.repository_name(),
-        source_run.branch(),
-        source_run.commit_sha(),
-        queued_at_ms,
-        repository
-            .pipeline()
-            .steps()
-            .iter()
-            .map(|step| {
-                cid_daemon::RunStep::new(
-                    step.name(),
-                    step.command(),
-                    repository.pipeline().image(),
-                    repository.pipeline().artifact_paths().to_vec(),
-                )
-            })
-            .collect(),
     ))
 }
 
@@ -534,17 +491,82 @@ impl HttpResponse {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use cid_base::file_path::FilePath;
+    use cid_base::result::CidResult;
     use cid_pal::pal::PalHandle;
     use cid_pal::pal_mock::PalMock;
 
-    use cid_daemon::{BranchRule, DaemonState, Pipeline, PipelineStep, Repository, Run};
+    use cid_daemon::{
+        BranchRule, DaemonApi, DaemonState, Pipeline, PipelineStep, Repository, Run, RunStep,
+    };
 
     use super::{
-        CidStateStore, asset_response, content_type_for_path, request_method, request_path,
-        resolve_asset_path, route_request,
+        asset_response, content_type_for_path, request_method, request_path, resolve_asset_path,
+        route_request,
     };
     use crate::asset_source::AssetSource;
+
+    struct TestDaemon {
+        state: Mutex<DaemonState>,
+    }
+
+    impl TestDaemon {
+        fn new(state: DaemonState) -> Self {
+            Self {
+                state: Mutex::new(state),
+            }
+        }
+    }
+
+    impl DaemonApi for TestDaemon {
+        fn snapshot(&self) -> CidResult<DaemonState> {
+            Ok(self.state.lock().unwrap().clone())
+        }
+
+        fn replay_run(&self, run_id: u64) -> CidResult<Run> {
+            let mut state = self.state.lock().unwrap();
+            let Some(source_run) = state.runs().iter().find(|run| run.id() == run_id).cloned()
+            else {
+                return Err(cid_base::err!("run not found"));
+            };
+            let Some(repository) = state
+                .repositories()
+                .iter()
+                .find(|repository| repository.id() == source_run.repository_id())
+                .cloned()
+            else {
+                return Err(cid_base::err!("repository not found"));
+            };
+
+            let next_run_id = state.runs().iter().map(Run::id).max().unwrap_or(0) + 1;
+            let next_run = Run::new(
+                next_run_id,
+                source_run.repository_id(),
+                source_run.repository_name(),
+                source_run.branch(),
+                source_run.commit_sha(),
+                999,
+                repository
+                    .pipeline()
+                    .steps()
+                    .iter()
+                    .map(|step| {
+                        RunStep::new(
+                            step.name(),
+                            step.command(),
+                            repository.pipeline().image(),
+                            repository.pipeline().artifact_paths().to_vec(),
+                        )
+                    })
+                    .collect(),
+            );
+            state.push_run(next_run.clone());
+
+            Ok(next_run)
+        }
+    }
 
     #[test]
     fn request_path_extracts_target_from_request_line() {
@@ -565,11 +587,11 @@ mod tests {
     #[test]
     fn route_request_returns_json_summary() {
         let pal = PalMock::new();
-        let store = sample_store(&pal);
+        let daemon = TestDaemon::new(sample_state(&pal));
         let response = route_request(
             "GET",
             "/api/summary",
-            &store,
+            &daemon,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
         )
         .unwrap();
@@ -622,11 +644,11 @@ mod tests {
     #[test]
     fn route_request_returns_repository_branch_summaries_in_latest_build_order() {
         let pal = PalMock::new();
-        let store = sample_store(&pal);
+        let daemon = TestDaemon::new(sample_state(&pal));
         let response = route_request(
             "GET",
             "/api/repositories/cid/branches",
-            &store,
+            &daemon,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
         )
         .unwrap();
@@ -646,11 +668,11 @@ mod tests {
     #[test]
     fn route_request_returns_branch_detail_for_url_encoded_branch_name() {
         let pal = PalMock::new();
-        let store = sample_store(&pal);
+        let daemon = TestDaemon::new(sample_state(&pal));
         let response = route_request(
             "GET",
             "/api/repositories/cid/branches/feature%2Fbeta",
-            &store,
+            &daemon,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
         )
         .unwrap();
@@ -664,11 +686,11 @@ mod tests {
     #[test]
     fn route_request_returns_step_log_contents() {
         let pal = PalMock::new();
-        let store = sample_store(&pal);
+        let daemon = TestDaemon::new(sample_state(&pal));
         let response = route_request(
             "GET",
             "/api/runs/3/steps/0/log",
-            &store,
+            &daemon,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
         )
         .unwrap();
@@ -681,17 +703,17 @@ mod tests {
     #[test]
     fn route_request_replays_a_run_as_new_queued_run() {
         let pal = PalMock::new();
-        let store = sample_store(&pal);
+        let daemon = TestDaemon::new(sample_state(&pal));
         let response = route_request(
             "POST",
             "/api/runs/3/replay",
-            &store,
+            &daemon,
             &AssetSource::filesystem(PalHandle::new(pal), FilePath::new("ui/dist")),
         )
         .unwrap();
 
         let body = String::from_utf8(response.body).unwrap();
-        let state = store.load().unwrap();
+        let state = daemon.snapshot().unwrap();
 
         assert_eq!(response.status, "201 Created");
         assert!(body.contains("\"id\": 4"));
@@ -709,8 +731,7 @@ mod tests {
         assert!(replayed_run.steps()[0].log_path().is_none());
     }
 
-    fn sample_store(_pal: &PalMock) -> CidStateStore {
-        let store = CidStateStore::new(FilePath::new(temp_state_dir("web-store")));
+    fn sample_state(_pal: &PalMock) -> DaemonState {
         let repository = Repository::new(
             1,
             "cid",
@@ -727,9 +748,10 @@ mod tests {
             ),
         );
 
-        let latest_log_path = store
-            .write_step_log(&repository, 3, 0, "latest main log")
-            .unwrap();
+        let latest_log_dir = FilePath::new(temp_state_dir("web-store")).join("runs");
+        std::fs::create_dir_all(latest_log_dir.as_path()).unwrap();
+        let latest_log_path = latest_log_dir.join("step-0.log");
+        std::fs::write(latest_log_path.as_path(), "latest main log").unwrap();
         let run = sample_run(SampleRun {
             id: 1,
             branch: "main",
@@ -764,14 +786,11 @@ mod tests {
             image: "alpine:3.20",
         });
 
-        let state = DaemonState::new(
+        DaemonState::new(
             vec![repository],
             Vec::new(),
             vec![run, newer_run, latest_run],
-        );
-        store.save(&state).unwrap();
-
-        store
+        )
     }
 
     struct SampleRun<'a> {

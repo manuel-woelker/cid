@@ -276,17 +276,17 @@ Recommended order:
 
 # How should this work be tracked?
 
-- [ ] Document daemon authority and stateless presentation in [docs/ARCHITECTURE.md](/data/projects/cid/docs/ARCHITECTURE.md)
-- [ ] Define daemon-owned query request and response types
-- [ ] Define daemon-owned command request and response types
-- [ ] Introduce a daemon façade or handle for external callers
-- [ ] Route replay requests through daemon command handling instead of direct store writes
-- [ ] Publish an immutable daemon snapshot for read queries
-- [ ] Serve repository, branch, run, and summary API reads from the daemon snapshot
-- [ ] Remove direct `CidStateStore` reads and writes from [crates/web/src/lib.rs](/data/projects/cid/crates/web/src/lib.rs)
+- [x] Document daemon authority and stateless presentation in [docs/ARCHITECTURE.md](/data/projects/cid/docs/ARCHITECTURE.md)
+- [x] Define daemon-owned query request and response types
+- [x] Define daemon-owned command request and response types
+- [x] Introduce a daemon façade or handle for external callers
+- [x] Route replay requests through daemon command handling instead of direct store writes
+- [x] Publish an immutable daemon snapshot for read queries
+- [x] Serve repository, branch, run, and summary API reads from the daemon snapshot
+- [x] Remove direct `CidStateStore` reads and writes from [crates/web/src/lib.rs](/data/projects/cid/crates/web/src/lib.rs)
 - [ ] Tighten module visibility so persistence is not a presentation dependency
 - [ ] Add daemon-level regression tests for command handling during active run cycles
-- [ ] Add web tests that verify replay requests round-trip through the daemon interface
+- [x] Add web tests that verify replay requests round-trip through the daemon interface
 - [ ] Run `./scripts/check-code.sh`
 
 # How should this be verified?
