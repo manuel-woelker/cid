@@ -90,6 +90,7 @@ impl CidDaemon {
     }
 
     pub fn run_cycle(&mut self) -> CidResult<RunCycleReport> {
+        self.reload_externally_added_runs()?;
         let repositories = self.config.repositories(&*self.pal)?;
         sync_repositories(&mut self.state, repositories);
 
@@ -111,6 +112,7 @@ impl CidDaemon {
         let executed_runs = self
             .runner
             .execute_queued_runs(&self.state.repositories, &mut self.state.runs)?;
+        self.reload_externally_added_runs()?;
         self.store.save(&self.state)?;
 
         Ok(RunCycleReport {
@@ -130,6 +132,12 @@ impl CidDaemon {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64
+    }
+
+    fn reload_externally_added_runs(&mut self) -> CidResult<()> {
+        let persisted_state = self.store.load()?;
+        merge_missing_runs(&mut self.state, persisted_state.runs);
+        Ok(())
     }
 }
 
@@ -215,6 +223,18 @@ fn sync_repositories(state: &mut DaemonState, repositories: Vec<Repository>) {
     state.repositories = next_repositories;
 }
 
+fn merge_missing_runs(state: &mut DaemonState, runs: Vec<Run>) {
+    for run in runs {
+        if state.runs.iter().any(|existing| existing.id() == run.id()) {
+            continue;
+        }
+
+        state.runs.push(run);
+    }
+
+    state.runs.sort_by_key(Run::id);
+}
+
 #[cfg(test)]
 mod tests {
     use cid_base::file_path::FilePath;
@@ -223,8 +243,11 @@ mod tests {
     use cid_pal::process_result::ProcessResult;
 
     use crate::repository::{BranchRule, Pipeline, PipelineStep, Repository};
+    use crate::run::{Run, RunStep};
 
-    use super::{DaemonState, ensure_devcontainer_cli_available, sync_repositories};
+    use super::{
+        DaemonState, ensure_devcontainer_cli_available, merge_missing_runs, sync_repositories,
+    };
 
     #[test]
     fn repository_sync_replaces_in_memory_registry() {
@@ -320,5 +343,51 @@ mod tests {
                 .to_test_string()
                 .contains("failed to execute `devcontainer --version`")
         );
+    }
+
+    #[test]
+    fn merge_missing_runs_keeps_existing_runs_and_adds_external_replays() {
+        let mut state = DaemonState::new(
+            Vec::new(),
+            Vec::new(),
+            vec![Run::new(
+                2,
+                1,
+                "cid",
+                "main",
+                "existing",
+                200,
+                vec![RunStep::new("test", "cargo test", "rust:1.85", Vec::new())],
+            )],
+        );
+
+        merge_missing_runs(
+            &mut state,
+            vec![
+                Run::new(
+                    1,
+                    1,
+                    "cid",
+                    "main",
+                    "older",
+                    100,
+                    vec![RunStep::new("test", "cargo test", "rust:1.85", Vec::new())],
+                ),
+                Run::new(
+                    2,
+                    1,
+                    "cid",
+                    "main",
+                    "stale-duplicate",
+                    200,
+                    vec![RunStep::new("test", "cargo test", "rust:1.85", Vec::new())],
+                ),
+            ],
+        );
+
+        assert_eq!(state.runs().len(), 2);
+        assert_eq!(state.runs()[0].id(), 1);
+        assert_eq!(state.runs()[1].id(), 2);
+        assert_eq!(state.runs()[1].commit_sha(), "existing");
     }
 }
