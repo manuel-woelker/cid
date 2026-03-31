@@ -33,7 +33,7 @@ recipe "default" {
   task "test" description="Run the test suite" {
     depends-on "build"
     run shell="""
-      cargo test \
+      cargo nextest run \
         --workspace \
         --all-targets \
         --all-features
