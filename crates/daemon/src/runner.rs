@@ -107,15 +107,19 @@ impl DockerRunner {
                 }
             }
 
-            let command = self.build_command(&repository_path, step_name.as_str())?;
-            let mut sink = OutputCollector::default();
-            let output = self.pal.run_process(&command, &mut sink);
+            let (output, log_output) =
+                if repository.pipeline().image() == "devcontainer" && step_name == "ci" {
+                    self.execute_devcontainer_ci_step(&repository_path)?
+                } else {
+                    let command = self.build_command(&repository_path, step_name.as_str())?;
+                    let mut sink = OutputCollector::default();
+                    let output = self.pal.run_process(&command, &mut sink);
+                    (output, format_process_output(&sink))
+                };
             let finished_at_ms = self.now_ms();
 
             match output {
                 Ok(output) => {
-                    let log_output = format_process_output(&sink);
-
                     let log_path =
                         self.store
                             .write_step_log(repository, run_id, step_index, &log_output)?;
@@ -220,27 +224,8 @@ impl DockerRunner {
         repository_path: &cid_base::file_path::FilePath,
         step_name: &str,
     ) -> CidResult<ProcessCommand> {
-        let config_path = repository_path
-            .join(".devcontainer")
-            .join("devcontainer.json");
-
         match step_name {
-            "ci" => Ok(ProcessCommand {
-                executable: "sh".into(),
-                arguments: vec![
-                    "-lc".into(),
-                    format!(
-                        "devcontainer up --workspace-folder '{}' --config '{}' --remove-existing-container >/dev/null 2>&1 && devcontainer exec --workspace-folder '{}' --config '{}' /bin/sh -lc './scripts/ci.sh'",
-                        repository_path.as_str(),
-                        config_path,
-                        repository_path.as_str(),
-                        config_path,
-                    )
-                    .into(),
-                ],
-                working_directory: Some(repository_path.clone()),
-                environment: Vec::new(),
-            }),
+            "ci" => Ok(self.build_ci_exec_command(repository_path)),
             _ => Err(cid_base::err!("unsupported run step `{step_name}`")),
         }
     }
@@ -287,6 +272,27 @@ impl DockerRunner {
                 "/bin/sh".into(),
                 "-lc".into(),
                 "./scripts/ci.sh".into(),
+            ],
+            working_directory: Some(repository_path.clone()),
+            environment: Vec::new(),
+        }
+    }
+
+    pub fn build_devcontainer_up_command(
+        &self,
+        repository_path: &cid_base::file_path::FilePath,
+    ) -> ProcessCommand {
+        let config_path = repository_path
+            .join(".devcontainer")
+            .join("devcontainer.json");
+        ProcessCommand {
+            executable: "devcontainer".into(),
+            arguments: vec![
+                "up".into(),
+                "--workspace-folder".into(),
+                repository_path.as_str().into(),
+                "--config".into(),
+                config_path.as_str().into(),
             ],
             working_directory: Some(repository_path.clone()),
             environment: Vec::new(),
@@ -425,6 +431,39 @@ impl DockerRunner {
             .unwrap_or_default()
             .as_millis() as u64
     }
+
+    fn execute_devcontainer_ci_step(
+        &self,
+        repository_path: &cid_base::file_path::FilePath,
+    ) -> CidResult<(CidResult<cid_pal::process_result::ProcessResult>, String)> {
+        let exec_command = self.build_ci_exec_command(repository_path);
+        let mut exec_sink = OutputCollector::default();
+        let exec_output = self.pal.run_process(&exec_command, &mut exec_sink);
+        let exec_log_output = format_process_output(&exec_sink);
+
+        if should_retry_devcontainer_exec(&exec_output, &exec_log_output) {
+            let up_command = self.build_devcontainer_up_command(repository_path);
+            let mut up_sink = OutputCollector::default();
+            let up_output = self.pal.run_process(&up_command, &mut up_sink);
+            let up_log_output = format_process_output(&up_sink);
+
+            match up_output {
+                Ok(up_output) if up_output.exit_code == Some(0) => {
+                    let mut retry_exec_sink = OutputCollector::default();
+                    let retry_exec_output =
+                        self.pal.run_process(&exec_command, &mut retry_exec_sink);
+                    let retry_exec_log_output = format_process_output(&retry_exec_sink);
+                    let combined_log_output =
+                        join_log_output(&up_log_output, &retry_exec_log_output);
+                    Ok((retry_exec_output, combined_log_output))
+                }
+                Ok(up_output) => Ok((Ok(up_output), up_log_output)),
+                Err(error) => Ok((Err(error), up_log_output)),
+            }
+        } else {
+            Ok((exec_output, exec_log_output))
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -504,6 +543,45 @@ fn format_process_output(sink: &OutputCollector) -> String {
     output
 }
 
+fn join_log_output(first: &str, second: &str) -> String {
+    match (first.is_empty(), second.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => first.to_string(),
+        (true, false) => second.to_string(),
+        (false, false) => format!("{first}\n{second}"),
+    }
+}
+
+fn should_retry_devcontainer_exec(
+    output: &CidResult<cid_pal::process_result::ProcessResult>,
+    log_output: &str,
+) -> bool {
+    if output.is_err() {
+        return true;
+    }
+
+    let Some(result) = output.as_ref().ok() else {
+        return false;
+    };
+
+    if result.exit_code == Some(0) {
+        return false;
+    }
+
+    let lower = log_output.to_ascii_lowercase();
+    let stale_runtime_markers = [
+        "container is not running",
+        "container is stopped",
+        "no such container",
+        "container does not exist",
+        "not found",
+    ];
+
+    stale_runtime_markers
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
 #[derive(Default)]
 struct OutputCollector {
     stdout: Vec<u8>,
@@ -524,14 +602,18 @@ impl ProcessEventSink for OutputCollector {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use cid_base::file_path::FilePath;
+    use cid_base::result::CidResult;
     use cid_base::timestamp::Timestamp;
-    use cid_pal::pal::PalHandle;
+    use cid_pal::pal::{Pal, PalHandle, ReadSeek};
     use cid_pal::pal_mock::PalMock;
     use cid_pal::process_command::ProcessCommand;
     use cid_pal::process_event::ProcessEvent;
+    use cid_pal::process_event_sink::ProcessEventSink;
     use cid_pal::process_output_event::ProcessOutputEvent;
     use cid_pal::process_output_stream::ProcessOutputStream;
     use cid_pal::process_result::ProcessResult;
@@ -542,6 +624,110 @@ mod tests {
     use crate::run_status::RunStatus;
 
     use super::{DockerRunner, resolve_repository_path};
+
+    type QueuedProcessExecutions =
+        Arc<Mutex<HashMap<ProcessCommand, VecDeque<(Vec<ProcessEvent>, ProcessResult)>>>>;
+
+    #[derive(Clone, Debug)]
+    struct SequencedPal {
+        inner: PalMock,
+        queued_executions: QueuedProcessExecutions,
+    }
+
+    impl SequencedPal {
+        fn new(inner: PalMock) -> Self {
+            Self {
+                inner,
+                queued_executions: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+
+        fn set_file(&self, path: &str, content: impl Into<Vec<u8>>) {
+            self.inner.set_file(path, content);
+        }
+
+        fn set_process_execution(
+            &self,
+            command: ProcessCommand,
+            events: Vec<ProcessEvent>,
+            result: ProcessResult,
+        ) {
+            self.inner.set_process_execution(command, events, result);
+        }
+
+        fn push_process_execution(
+            &self,
+            command: ProcessCommand,
+            events: Vec<ProcessEvent>,
+            result: ProcessResult,
+        ) {
+            self.queued_executions
+                .lock()
+                .unwrap()
+                .entry(command)
+                .or_default()
+                .push_back((events, result));
+        }
+
+        fn set_current_system_time(&self, system_time: SystemTime) {
+            self.inner.set_current_system_time(system_time);
+        }
+    }
+
+    impl Pal for SequencedPal {
+        fn file_exists(&self, path: &FilePath) -> CidResult<bool> {
+            self.inner.file_exists(path)
+        }
+
+        fn directory_exists(&self, path: &FilePath) -> CidResult<bool> {
+            self.inner.directory_exists(path)
+        }
+
+        fn read_file(&self, path: &FilePath) -> CidResult<Box<dyn ReadSeek + 'static>> {
+            self.inner.read_file(path)
+        }
+
+        fn create_directory_all(&self, path: &FilePath) -> CidResult<()> {
+            self.inner.create_directory_all(path)
+        }
+
+        fn write_file(&self, path: &FilePath, content: &[u8]) -> CidResult<()> {
+            self.inner.write_file(path, content)
+        }
+
+        fn run_process(
+            &self,
+            command: &ProcessCommand,
+            sink: &mut dyn ProcessEventSink,
+        ) -> CidResult<ProcessResult> {
+            if let Some((events, result)) = self
+                .queued_executions
+                .lock()
+                .unwrap()
+                .get_mut(command)
+                .and_then(VecDeque::pop_front)
+            {
+                for event in events {
+                    sink.handle_event(event)?;
+                }
+                return Ok(result);
+            }
+
+            self.inner.run_process(command, sink)
+        }
+
+        fn now(&self) -> Timestamp {
+            self.inner.now()
+        }
+
+        fn system_time(&self) -> SystemTime {
+            self.inner.system_time()
+        }
+
+        fn sleep(&self, duration: std::time::Duration) {
+            self.inner.sleep(duration)
+        }
+    }
 
     #[test]
     fn build_command_uses_devcontainer_exec_for_ci_step() {
@@ -555,7 +741,7 @@ mod tests {
             .build_command(&FilePath::new("/repos/cid"), "ci")
             .unwrap();
 
-        assert_eq!(command.executable.as_str(), "sh");
+        assert_eq!(command.executable.as_str(), "devcontainer");
         assert_eq!(
             command
                 .arguments
@@ -563,8 +749,41 @@ mod tests {
                 .map(|argument| argument.as_str())
                 .collect::<Vec<_>>(),
             vec![
+                "exec",
+                "--workspace-folder",
+                "/repos/cid",
+                "--config",
+                "/repos/cid/.devcontainer/devcontainer.json",
+                "/bin/sh",
                 "-lc",
-                "devcontainer up --workspace-folder '/repos/cid' --config '/repos/cid/.devcontainer/devcontainer.json' --remove-existing-container >/dev/null 2>&1 && devcontainer exec --workspace-folder '/repos/cid' --config '/repos/cid/.devcontainer/devcontainer.json' /bin/sh -lc './scripts/ci.sh'",
+                "./scripts/ci.sh",
+            ]
+        );
+    }
+
+    #[test]
+    fn build_devcontainer_up_command_uses_devcontainer_up_without_forced_recreation() {
+        let pal = PalMock::new();
+        let runner = DockerRunner::new(
+            CidStateStore::new(FilePath::new("/tmp/cid-state")),
+            PalHandle::new(pal),
+        );
+
+        let command = runner.build_devcontainer_up_command(&FilePath::new("/repos/cid"));
+
+        assert_eq!(command.executable.as_str(), "devcontainer");
+        assert_eq!(
+            command
+                .arguments
+                .iter()
+                .map(|argument| argument.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "up",
+                "--workspace-folder",
+                "/repos/cid",
+                "--config",
+                "/repos/cid/.devcontainer/devcontainer.json",
             ]
         );
     }
@@ -723,10 +942,16 @@ mod tests {
         );
         pal.set_process_execution(
             ProcessCommand {
-                executable: "sh".into(),
+                executable: "devcontainer".into(),
                 arguments: vec![
+                    "exec".into(),
+                    "--workspace-folder".into(),
+                    "/repos/cid".into(),
+                    "--config".into(),
+                    "/repos/cid/.devcontainer/devcontainer.json".into(),
+                    "/bin/sh".into(),
                     "-lc".into(),
-                    "devcontainer up --workspace-folder '/repos/cid' --config '/repos/cid/.devcontainer/devcontainer.json' --remove-existing-container >/dev/null 2>&1 && devcontainer exec --workspace-folder '/repos/cid' --config '/repos/cid/.devcontainer/devcontainer.json' /bin/sh -lc './scripts/ci.sh'".into(),
+                    "./scripts/ci.sh".into(),
                 ],
                 working_directory: Some(repository_path.clone()),
                 environment: Vec::new(),
@@ -767,6 +992,112 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(ci_log_path.as_path()).unwrap(),
             "ok\n"
+        );
+        cleanup(&state_dir);
+    }
+
+    #[test]
+    fn queued_run_recovers_with_devcontainer_up_when_exec_hits_stale_container() {
+        let pal = SequencedPal::new(PalMock::new());
+        pal.set_current_system_time(std::time::UNIX_EPOCH + std::time::Duration::from_millis(100));
+        let repository_path = FilePath::new("/repos/cid");
+        pal.set_file(
+            "/repos/cid/.devcontainer/devcontainer.json",
+            "{\"image\":\"rust:1.85\"}",
+        );
+        let repository = Repository::new(
+            1,
+            "cid",
+            repository_path.clone(),
+            vec![BranchRule::new("main")],
+            Pipeline::for_devcontainer(Vec::new()),
+        );
+        let state_dir = temp_state_dir("runner-state-recover");
+
+        let runner = DockerRunner::new(
+            CidStateStore::new(state_dir.clone()),
+            PalHandle::new(pal.clone()),
+        );
+        let fingerprint = runner.devcontainer_fingerprint(&repository_path).unwrap();
+        let image_tag = runner.image_tag(&repository, &fingerprint);
+
+        pal.set_process_execution(
+            runner.build_devcontainer_build_command(&repository_path, &image_tag),
+            vec![ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(1),
+                stream: ProcessOutputStream::Stdout,
+                bytes: b"built\n".to_vec(),
+            })],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(2),
+                exit_code: Some(0),
+            },
+        );
+        pal.push_process_execution(
+            runner.build_ci_exec_command(&repository_path),
+            vec![ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(5),
+                stream: ProcessOutputStream::Stderr,
+                bytes: b"container is not running\n".to_vec(),
+            })],
+            ProcessResult {
+                started_at: Timestamp::new(4),
+                finished_at: Timestamp::new(6),
+                exit_code: Some(1),
+            },
+        );
+        pal.set_process_execution(
+            runner.build_devcontainer_up_command(&repository_path),
+            vec![ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(7),
+                stream: ProcessOutputStream::Stdout,
+                bytes: b"started\n".to_vec(),
+            })],
+            ProcessResult {
+                started_at: Timestamp::new(7),
+                finished_at: Timestamp::new(8),
+                exit_code: Some(0),
+            },
+        );
+        pal.push_process_execution(
+            runner.build_ci_exec_command(&repository_path),
+            vec![ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(9),
+                stream: ProcessOutputStream::Stdout,
+                bytes: b"ok\n".to_vec(),
+            })],
+            ProcessResult {
+                started_at: Timestamp::new(9),
+                finished_at: Timestamp::new(10),
+                exit_code: Some(0),
+            },
+        );
+
+        let mut runs = vec![Run::new(
+            1,
+            1,
+            "cid",
+            "main",
+            "abc1234",
+            100,
+            vec![RunStep::new(
+                "ci",
+                "./scripts/ci.sh",
+                "devcontainer",
+                Vec::new(),
+            )],
+        )];
+        let executed = runner
+            .execute_queued_runs(std::slice::from_ref(&repository), &mut runs)
+            .unwrap();
+
+        assert_eq!(executed, 1);
+        assert_eq!(runs[0].status(), RunStatus::Passed);
+        let ci_log_path = runs[0].steps()[0].log_path().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(ci_log_path.as_path()).unwrap(),
+            "started\n\nok\n"
         );
         cleanup(&state_dir);
     }
