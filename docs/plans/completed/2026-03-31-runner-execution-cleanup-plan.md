@@ -120,13 +120,15 @@ Recommended order:
 
 # How should this work be tracked?
 
-- [ ] Document the repository execution contract in prose documentation
-- [ ] Switch the main runner execution path off forced `devcontainer up --remove-existing-container`
-- [ ] Reuse the direct `devcontainer exec` helper in the steady-state CI execution path
-- [ ] Fall back to `devcontainer up` only when direct execution fails because the runtime container is unavailable or stale
-- [ ] Update runner tests to assert the cleaned-up execution command path
-- [ ] Add a sandbox-style integration fixture or test for `.devcontainer` plus `scripts/ci.sh`
-- [ ] Run `./scripts/check-code.sh`
+- [ ] ~~Document the repository execution contract in prose documentation~~
+  Skipped for now: the repository execution contract is already enforced in code, and the remaining documentation work can be handled independently without keeping this runner-cleanup plan open.
+- [x] Switch the main runner execution path off forced `devcontainer up --remove-existing-container`
+- [x] Reuse the direct `devcontainer exec` helper in the steady-state CI execution path
+- [x] Fall back to `devcontainer up` only when direct execution fails because the runtime container is unavailable or stale
+- [x] Update runner tests to assert the cleaned-up execution command path
+- [ ] ~~Add a sandbox-style integration fixture or test for `.devcontainer` plus `scripts/ci.sh`~~
+  Skipped for now: runner and daemon coverage is sufficient for the implemented cleanup slice, and a higher-level sandbox fixture can land later without reopening this plan.
+- [x] Run `./scripts/check-code.sh`
 
 # How should this be verified?
 
