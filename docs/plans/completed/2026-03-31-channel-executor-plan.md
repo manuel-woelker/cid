@@ -144,13 +144,13 @@ Recommended order:
 
 # How should this work be tracked?
 
-- [ ] Introduce an explicit `ExecutionRequest` type for claimed work
-- [ ] Make daemon dispatch submit `ExecutionRequest` values through a dedicated channel
-- [ ] Keep executor completion flowing back through an explicit completion path
-- [ ] Add daemon helpers that expose dispatch/completion behavior without relying on low-level process details
-- [ ] Rewrite daemon runtime tests to assert dispatched requests and inject completions directly
-- [ ] Remove the brittle daemon-side blocking execution test helper
-- [ ] Run `./scripts/check-code.sh`
+- [x] Introduce an explicit `ExecutionRequest` type for claimed work
+- [x] Make daemon dispatch submit `ExecutionRequest` values through a dedicated channel
+- [x] Keep executor completion flowing back through an explicit completion path
+- [x] Add daemon helpers that expose dispatch/completion behavior without relying on low-level process details
+- [x] Rewrite daemon runtime tests to assert dispatched requests and inject completions directly
+- [x] Remove the brittle daemon-side blocking execution test helper
+- [x] Run `./scripts/check-code.sh`
 
 # How should this be verified?
 
