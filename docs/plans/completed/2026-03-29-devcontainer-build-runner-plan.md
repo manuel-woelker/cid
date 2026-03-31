@@ -40,6 +40,21 @@ The sandbox repository under [`sandboxes/cid-rust-sandbox`](/data/projects/cid/s
 
 What is missing is making `cid` treat that shape as the product contract instead of just repository convention.
 
+That core contract has now landed in code:
+
+- config validation requires `.devcontainer/devcontainer.json` and `scripts/ci.sh`
+- startup validation checks `devcontainer --version`
+- the runner computes a devcontainer fingerprint and caches successful builds
+- CI execution runs through the Dev Container CLI
+
+The remaining work is narrower than this original plan:
+
+- document the execution contract in prose outside this plan
+- clean up the execution path so it does not force container recreation on every run
+- optionally add a higher-level sandbox fixture
+
+The old checklist items about artifact-retention redesign and persistence changes for multi-phase run metadata are no longer the right completion bar for this plan, because the current runtime still models execution as a single `ci` step with an internal pre-build.
+
 # What execution model should `cid` adopt?
 
 `cid` should use one boring execution path:
@@ -253,7 +268,8 @@ Recommended order:
 
 # How should this work be tracked?
 
-- [ ] Document the new repository execution contract in prose documentation
+- [ ] ~~Document the new repository execution contract in prose documentation~~
+  Follow-up: this still matters, but it belongs in a smaller documentation-and-runner-cleanup plan now that the execution contract is already enforced in code.
 - [x] Replace or adapt the repository execution data model in [`crates/daemon/src/repository.rs`](/data/projects/cid/crates/daemon/src/repository.rs)
 - [x] Update config loading and validation in [`crates/daemon/src/config.rs`](/data/projects/cid/crates/daemon/src/config.rs) to require `.devcontainer` and `scripts/ci.sh`
 - [x] Add startup validation that runs `devcontainer --version` and fails clearly if the CLI is unavailable
@@ -261,11 +277,14 @@ Recommended order:
 - [x] Add a runner helper that derives a stable cache identity from repository identity plus fingerprint
 - [x] Add runner logic that builds the devcontainer environment through the Dev Container CLI before CI execution
 - [x] Add runner logic that executes `scripts/ci.sh` through the Dev Container CLI
-- [ ] Decide how artifact retention should work once step-level pipeline commands are removed
-- [ ] Update persistence in [`crates/daemon/src/persistence.rs`](/data/projects/cid/crates/daemon/src/persistence.rs) if run-phase metadata changes
+- [ ] ~~Decide how artifact retention should work once step-level pipeline commands are removed~~
+  Postponed: artifact retention still works through the current single-step run model, so this is follow-up design work rather than a blocker for the devcontainer-backed runner.
+- [ ] ~~Update persistence in [`crates/daemon/src/persistence.rs`](/data/projects/cid/crates/daemon/src/persistence.rs) if run-phase metadata changes~~
+  Postponed: run-phase metadata did not change in the implemented design because execution still persists one `ci` step rather than separate build and exec phases.
 - [x] Add or update colocated tests for config validation failures and success cases
 - [x] Add or update runner tests for `devcontainer --version`, devcontainer build command generation, and CI execution command generation
-- [ ] Add an end-to-end sandbox-style fixture that proves `cid` can build a devcontainer and run `scripts/ci.sh`
+- [ ] ~~Add an end-to-end sandbox-style fixture that proves `cid` can build a devcontainer and run `scripts/ci.sh`~~
+  Follow-up: still useful, but it should land with the smaller runner-cleanup follow-up instead of holding this broader migration plan open.
 - [x] Run `./scripts/check-code.sh`
 
 # How should the work be verified?
