@@ -28,7 +28,7 @@ pub struct CidDaemon {
     snapshot: Arc<RwLock<DaemonState>>,
     command_sender: mpsc::Sender<DaemonCommand>,
     command_receiver: mpsc::Receiver<DaemonCommand>,
-    execution_task_sender: mpsc::Sender<ExecutionTask>,
+    execution_request_sender: mpsc::Sender<ExecutionRequest>,
     dispatch_wakeup_pending: bool,
     execution_in_progress: bool,
 }
@@ -68,47 +68,29 @@ enum DaemonCommand {
     },
 }
 
-struct ExecutionTask {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExecutionRequest {
     repository: Repository,
     run: Run,
 }
 
 impl CidDaemon {
     pub fn from_config(config: &CidConfig, pal: PalHandle) -> CidResult<Self> {
-        ensure_devcontainer_cli_available(&*pal)?;
-        let store = CidStateStore::new(config.state_dir().clone());
-        let mut state = store.load()?;
-        let repositories = config.repositories(&*pal)?;
-        sync_repositories(&mut state, repositories);
-        store.save(&state)?;
-        let snapshot = Arc::new(RwLock::new(state.clone()));
-        let (command_sender, command_receiver) = mpsc::channel();
-        let (execution_task_sender, execution_task_receiver) = mpsc::channel();
-        let worker_runner = DockerRunner::new(store.clone(), pal.clone());
-        let worker_command_sender = command_sender.clone();
+        let (execution_request_sender, execution_request_receiver) = mpsc::channel();
+        let daemon =
+            Self::from_config_with_execution_sender(config, pal.clone(), execution_request_sender)?;
+        let worker_runner = DockerRunner::new(daemon.store.clone(), pal);
+        let worker_command_sender = daemon.command_sender.clone();
 
         thread::spawn(move || {
             run_execution_worker(
                 worker_runner,
-                execution_task_receiver,
+                execution_request_receiver,
                 worker_command_sender,
             );
         });
 
-        Ok(Self {
-            config: config.clone(),
-            scheduler: Scheduler::new(),
-            watcher: RepositoryWatcher::new(pal.clone()),
-            pal,
-            store,
-            state,
-            snapshot,
-            command_sender,
-            command_receiver,
-            execution_task_sender,
-            dispatch_wakeup_pending: false,
-            execution_in_progress: false,
-        })
+        Ok(daemon)
     }
 
     pub fn handle(&self) -> DaemonHandle {
@@ -306,9 +288,9 @@ impl CidDaemon {
         };
 
         self.persist_and_publish_state()?;
-        self.execution_task_sender
-            .send(ExecutionTask { repository, run })
-            .map_err(|_| cid_base::err!("execution task channel is closed"))?;
+        self.execution_request_sender
+            .send(ExecutionRequest { repository, run })
+            .map_err(|_| cid_base::err!("execution request channel is closed"))?;
         self.execution_in_progress = true;
         self.dispatch_wakeup_pending = false;
 
@@ -367,6 +349,36 @@ impl CidDaemon {
             self.wake_dispatch();
         }
         self.persist_and_publish_state()
+    }
+
+    fn from_config_with_execution_sender(
+        config: &CidConfig,
+        pal: PalHandle,
+        execution_request_sender: mpsc::Sender<ExecutionRequest>,
+    ) -> CidResult<Self> {
+        ensure_devcontainer_cli_available(&*pal)?;
+        let store = CidStateStore::new(config.state_dir().clone());
+        let mut state = store.load()?;
+        let repositories = config.repositories(&*pal)?;
+        sync_repositories(&mut state, repositories);
+        store.save(&state)?;
+        let snapshot = Arc::new(RwLock::new(state.clone()));
+        let (command_sender, command_receiver) = mpsc::channel();
+
+        Ok(Self {
+            config: config.clone(),
+            scheduler: Scheduler::new(),
+            watcher: RepositoryWatcher::new(pal.clone()),
+            pal,
+            store,
+            state,
+            snapshot,
+            command_sender,
+            command_receiver,
+            execution_request_sender,
+            dispatch_wakeup_pending: false,
+            execution_in_progress: false,
+        })
     }
 }
 
@@ -530,11 +542,11 @@ fn replay_run_from_source(
 
 fn run_execution_worker(
     runner: DockerRunner,
-    execution_task_receiver: mpsc::Receiver<ExecutionTask>,
+    execution_request_receiver: mpsc::Receiver<ExecutionRequest>,
     command_sender: mpsc::Sender<DaemonCommand>,
 ) {
-    while let Ok(task) = execution_task_receiver.recv() {
-        let completed_run = runner.execute_claimed_run(&task.repository, task.run);
+    while let Ok(request) = execution_request_receiver.recv() {
+        let completed_run = runner.execute_claimed_run(&request.repository, request.run);
         if command_sender
             .send(DaemonCommand::ExecutionFinished { run: completed_run })
             .is_err()
@@ -546,144 +558,28 @@ fn run_execution_worker(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Condvar, Mutex};
-    use std::time::{Duration, Instant, SystemTime};
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     use cid_base::file_path::FilePath;
-    use cid_base::result::CidResult;
     use cid_base::timestamp::Timestamp;
-    use cid_pal::pal::{Pal, PalHandle, ReadSeek};
+    use cid_pal::pal::PalHandle;
     use cid_pal::pal_mock::PalMock;
     use cid_pal::process_command::ProcessCommand;
     use cid_pal::process_event::ProcessEvent;
-    use cid_pal::process_event_sink::ProcessEventSink;
     use cid_pal::process_output_event::ProcessOutputEvent;
     use cid_pal::process_output_stream::ProcessOutputStream;
     use cid_pal::process_result::ProcessResult;
 
     use crate::config::CidConfig;
-    use crate::persistence::CidStateStore;
     use crate::repository::{BranchRule, Pipeline, PipelineStep, Repository};
     use crate::run::{Run, RunStep};
     use crate::run_status::RunStatus;
-    use crate::runner::DockerRunner;
 
     use super::{
-        CidDaemon, DaemonApi, DaemonState, ensure_devcontainer_cli_available, merge_missing_runs,
-        sync_repositories,
+        CidDaemon, DaemonApi, DaemonCommand, DaemonState, ExecutionRequest,
+        ensure_devcontainer_cli_available, merge_missing_runs, sync_repositories,
     };
-
-    #[derive(Clone, Debug)]
-    struct BlockingPal {
-        inner: PalMock,
-        release_pair: Arc<(Mutex<bool>, Condvar)>,
-        started_pair: Arc<(Mutex<bool>, Condvar)>,
-        block_ci_execution: Arc<AtomicBool>,
-    }
-
-    impl BlockingPal {
-        fn new(inner: PalMock) -> Self {
-            Self {
-                inner,
-                release_pair: Arc::new((Mutex::new(false), Condvar::new())),
-                started_pair: Arc::new((Mutex::new(false), Condvar::new())),
-                block_ci_execution: Arc::new(AtomicBool::new(false)),
-            }
-        }
-
-        fn block_ci_execution(&self) {
-            self.block_ci_execution.store(true, Ordering::SeqCst);
-        }
-
-        fn wait_until_ci_started(&self) {
-            let (lock, cvar) = &*self.started_pair;
-            let mut started = lock.lock().unwrap();
-            while !*started {
-                started = cvar.wait(started).unwrap();
-            }
-        }
-
-        fn release_ci_execution(&self) {
-            let (lock, cvar) = &*self.release_pair;
-            *lock.lock().unwrap() = true;
-            cvar.notify_all();
-        }
-
-        fn set_process_execution(
-            &self,
-            command: ProcessCommand,
-            events: Vec<ProcessEvent>,
-            result: ProcessResult,
-        ) {
-            self.inner.set_process_execution(command, events, result);
-        }
-
-        fn set_file(&self, file_path: &str, content: impl Into<Vec<u8>>) {
-            self.inner.set_file(file_path, content);
-        }
-
-        fn set_directory(&self, path: &str) {
-            self.inner.set_directory(path);
-        }
-    }
-
-    impl Pal for BlockingPal {
-        fn file_exists(&self, path: &FilePath) -> CidResult<bool> {
-            self.inner.file_exists(path)
-        }
-
-        fn directory_exists(&self, path: &FilePath) -> CidResult<bool> {
-            self.inner.directory_exists(path)
-        }
-
-        fn read_file(&self, path: &FilePath) -> CidResult<Box<dyn ReadSeek + 'static>> {
-            self.inner.read_file(path)
-        }
-
-        fn create_directory_all(&self, path: &FilePath) -> CidResult<()> {
-            self.inner.create_directory_all(path)
-        }
-
-        fn write_file(&self, path: &FilePath, content: &[u8]) -> CidResult<()> {
-            self.inner.write_file(path, content)
-        }
-
-        fn run_process(
-            &self,
-            command: &ProcessCommand,
-            sink: &mut dyn ProcessEventSink,
-        ) -> CidResult<ProcessResult> {
-            if self.block_ci_execution.load(Ordering::SeqCst) && command.executable.as_str() == "sh"
-            {
-                let (started_lock, started_cvar) = &*self.started_pair;
-                *started_lock.lock().unwrap() = true;
-                started_cvar.notify_all();
-
-                let (release_lock, release_cvar) = &*self.release_pair;
-                let mut released = release_lock.lock().unwrap();
-                while !*released {
-                    released = release_cvar.wait(released).unwrap();
-                }
-            }
-
-            self.inner.run_process(command, sink)
-        }
-
-        fn now(&self) -> Timestamp {
-            self.inner.now()
-        }
-
-        fn system_time(&self) -> SystemTime {
-            self.inner.system_time()
-        }
-
-        fn sleep(&self, duration: Duration) {
-            self.inner.sleep(duration)
-        }
-    }
 
     #[test]
     fn repository_sync_replaces_in_memory_registry() {
@@ -829,15 +725,9 @@ mod tests {
 
     #[test]
     fn replay_dispatches_without_waiting_for_poll_interval() {
-        let (mut daemon, pal, state_dir, repository_path) = test_daemon();
-        pal.block_ci_execution();
+        let (mut daemon, _pal, _state_dir, _repository_path, execution_request_receiver) =
+            test_daemon();
         add_completed_source_run(&mut daemon, "existing");
-        register_runner_commands(
-            &pal,
-            &state_dir,
-            daemon.repositories()[0].clone(),
-            &repository_path,
-        );
 
         let replayed_run = daemon.replay_run(1).unwrap();
 
@@ -849,7 +739,7 @@ mod tests {
         );
 
         assert!(daemon.dispatch_if_possible().unwrap());
-        pal.wait_until_ci_started();
+        let execution_request = recv_execution_request(&execution_request_receiver);
 
         let running_run = daemon
             .state
@@ -863,10 +753,7 @@ mod tests {
             RunStatus::Running
         );
 
-        pal.release_ci_execution();
-        daemon
-            .wait_for_next_event(Instant::now() + Duration::from_millis(200))
-            .unwrap();
+        finish_execution_request(&mut daemon, execution_request, 500);
         let finished_run = daemon
             .state
             .runs()
@@ -887,20 +774,14 @@ mod tests {
 
     #[test]
     fn commit_discovery_continues_while_execution_is_busy() {
-        let (mut daemon, pal, state_dir, repository_path) = test_daemon();
-        pal.block_ci_execution();
+        let (mut daemon, pal, _state_dir, repository_path, execution_request_receiver) =
+            test_daemon();
         add_completed_source_run(&mut daemon, "existing");
-        register_runner_commands(
-            &pal,
-            &state_dir,
-            daemon.repositories()[0].clone(),
-            &repository_path,
-        );
         register_git_head(&pal, &repository_path, "newcommit1");
 
         let replayed_run = daemon.replay_run(1).unwrap();
         assert!(daemon.dispatch_if_possible().unwrap());
-        pal.wait_until_ci_started();
+        let execution_request = recv_execution_request(&execution_request_receiver);
 
         assert!(daemon.execution_in_progress);
         let report = daemon.run_discovery_cycle().unwrap();
@@ -923,30 +804,21 @@ mod tests {
                 .any(|run| run.commit_sha() == "newcommit1" && run.status() == RunStatus::Queued)
         );
 
-        pal.release_ci_execution();
-        daemon
-            .wait_for_next_event(Instant::now() + Duration::from_millis(200))
-            .unwrap();
+        finish_execution_request(&mut daemon, execution_request, 500);
     }
 
     #[test]
     fn dispatcher_does_not_double_start_and_wakes_when_capacity_returns() {
-        let (mut daemon, pal, state_dir, repository_path) = test_daemon();
-        pal.block_ci_execution();
+        let (mut daemon, _pal, _state_dir, _repository_path, execution_request_receiver) =
+            test_daemon();
         add_completed_source_run(&mut daemon, "existing");
         add_completed_source_run(&mut daemon, "other");
-        register_runner_commands(
-            &pal,
-            &state_dir,
-            daemon.repositories()[0].clone(),
-            &repository_path,
-        );
 
         let first_replay = daemon.replay_run(1).unwrap();
         let second_replay = daemon.replay_run(2).unwrap();
 
         assert!(daemon.dispatch_if_possible().unwrap());
-        pal.wait_until_ci_started();
+        let first_execution_request = recv_execution_request(&execution_request_receiver);
         assert!(daemon.execution_in_progress);
         assert!(!daemon.dispatch_if_possible().unwrap());
         assert_eq!(
@@ -966,10 +838,7 @@ mod tests {
                 .any(|run| run.id() == second_replay.id() && run.status() == RunStatus::Queued)
         );
 
-        pal.release_ci_execution();
-        daemon
-            .wait_for_next_event(Instant::now() + Duration::from_millis(200))
-            .unwrap();
+        finish_execution_request(&mut daemon, first_execution_request, 500);
 
         assert!(!daemon.execution_in_progress);
         assert!(daemon.dispatch_wakeup_pending);
@@ -981,32 +850,45 @@ mod tests {
                 .any(|run| run.id() == first_replay.id() && run.status().is_finished())
         );
         assert!(daemon.dispatch_if_possible().unwrap());
-        assert!(
-            daemon
-                .state
-                .runs()
-                .iter()
-                .any(|run| run.id() == second_replay.id() && run.status() == RunStatus::Running)
-        );
+        let second_execution_request = recv_execution_request(&execution_request_receiver);
+        assert!(second_execution_request.run.id() == second_replay.id());
     }
 
-    fn test_daemon() -> (CidDaemon, BlockingPal, String, FilePath) {
-        let pal = BlockingPal::new(PalMock::new());
+    fn test_daemon() -> (
+        CidDaemon,
+        PalMock,
+        String,
+        FilePath,
+        mpsc::Receiver<ExecutionRequest>,
+    ) {
+        let pal = PalMock::new();
         let state_dir = temp_state_dir("daemon-runtime-state");
         let repository_path = FilePath::new(temp_state_dir("daemon-runtime-repo"));
         let config_path = FilePath::new("cid-config.yaml");
+        let (execution_request_sender, execution_request_receiver) = mpsc::channel();
 
         seed_repository_config(&pal, &config_path, &state_dir, &repository_path);
         register_devcontainer_version_check(&pal);
 
         let config = CidConfig::load_from_path(&config_path, &pal).unwrap();
-        let daemon = CidDaemon::from_config(&config, PalHandle::new(pal.clone())).unwrap();
+        let daemon = CidDaemon::from_config_with_execution_sender(
+            &config,
+            PalHandle::new(pal.clone()),
+            execution_request_sender,
+        )
+        .unwrap();
 
-        (daemon, pal, state_dir, repository_path)
+        (
+            daemon,
+            pal,
+            state_dir,
+            repository_path,
+            execution_request_receiver,
+        )
     }
 
     fn seed_repository_config(
-        pal: &BlockingPal,
+        pal: &PalMock,
         config_path: &FilePath,
         state_dir: &str,
         repository_path: &FilePath,
@@ -1040,7 +922,7 @@ mod tests {
         );
     }
 
-    fn register_devcontainer_version_check(pal: &BlockingPal) {
+    fn register_devcontainer_version_check(pal: &PalMock) {
         pal.set_process_execution(
             ProcessCommand {
                 executable: "devcontainer".into(),
@@ -1057,7 +939,7 @@ mod tests {
         );
     }
 
-    fn register_git_head(pal: &BlockingPal, repository_path: &FilePath, commit_sha: &str) {
+    fn register_git_head(pal: &PalMock, repository_path: &FilePath, commit_sha: &str) {
         pal.set_process_execution(
             ProcessCommand {
                 executable: "git".into(),
@@ -1076,49 +958,6 @@ mod tests {
                 exit_code: Some(0),
             },
         );
-    }
-
-    fn register_runner_commands(
-        pal: &BlockingPal,
-        state_dir: &str,
-        repository: Repository,
-        repository_path: &FilePath,
-    ) {
-        let runner = DockerRunner::new(
-            CidStateStore::new(FilePath::new(state_dir)),
-            PalHandle::new(pal.clone()),
-        );
-        let devcontainer_contents = "{\"image\":\"rust:1.85\"}";
-        let image_tag = format!(
-            "cid-devcontainer-cid:{}",
-            &fingerprint(devcontainer_contents)[..12]
-        );
-
-        pal.set_process_execution(
-            runner.build_devcontainer_build_command(repository_path, &image_tag),
-            Vec::new(),
-            ProcessResult {
-                started_at: Timestamp::new(20),
-                finished_at: Timestamp::new(21),
-                exit_code: Some(0),
-            },
-        );
-        pal.set_process_execution(
-            runner.build_command(repository_path, "ci").unwrap(),
-            Vec::new(),
-            ProcessResult {
-                started_at: Timestamp::new(30),
-                finished_at: Timestamp::new(31),
-                exit_code: Some(0),
-            },
-        );
-        let metadata_path = FilePath::new(state_dir)
-            .join("devcontainer-cache")
-            .join(format!(
-                "{}.json",
-                slugify_for_test(&format!("{}-{}", repository.name(), repository.path()))
-            ));
-        let _ = std::fs::remove_file(metadata_path.as_path());
     }
 
     fn add_completed_source_run(daemon: &mut CidDaemon, commit_sha: &str) {
@@ -1143,6 +982,26 @@ mod tests {
         daemon.persist_and_publish_state().unwrap();
     }
 
+    fn recv_execution_request(
+        execution_request_receiver: &mpsc::Receiver<ExecutionRequest>,
+    ) -> ExecutionRequest {
+        execution_request_receiver
+            .recv_timeout(Duration::from_millis(200))
+            .unwrap()
+    }
+
+    fn finish_execution_request(
+        daemon: &mut CidDaemon,
+        execution_request: ExecutionRequest,
+        finished_at_ms: u64,
+    ) {
+        let mut completed_run = execution_request.run;
+        completed_run.finish(finished_at_ms, RunStatus::Passed);
+        daemon
+            .handle_command(DaemonCommand::ExecutionFinished { run: completed_run })
+            .unwrap();
+    }
+
     fn temp_state_dir(prefix: &str) -> String {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1152,28 +1011,5 @@ mod tests {
             .join(format!("cid-{prefix}-{unique}"))
             .to_string_lossy()
             .to_string()
-    }
-
-    fn fingerprint(contents: &str) -> String {
-        let mut hasher = DefaultHasher::new();
-        contents.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
-    }
-
-    fn slugify_for_test(value: &str) -> String {
-        let mut slug = String::new();
-        let mut last_was_dash = false;
-
-        for character in value.chars() {
-            if character.is_ascii_alphanumeric() {
-                slug.push(character.to_ascii_lowercase());
-                last_was_dash = false;
-            } else if !last_was_dash {
-                slug.push('-');
-                last_was_dash = true;
-            }
-        }
-
-        slug.trim_matches('-').to_string()
     }
 }
