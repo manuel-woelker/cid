@@ -572,8 +572,10 @@ fn should_retry_devcontainer_exec(
     let stale_runtime_markers = [
         "container is not running",
         "container is stopped",
+        "container state improper",
         "no such container",
         "container does not exist",
+        "shell server terminated",
         "not found",
     ];
 
@@ -1099,6 +1101,107 @@ mod tests {
             std::fs::read_to_string(ci_log_path.as_path()).unwrap(),
             "started\n\nok\n"
         );
+        cleanup(&state_dir);
+    }
+
+    #[test]
+    fn queued_run_recovers_when_exec_reports_improper_container_state() {
+        let pal = SequencedPal::new(PalMock::new());
+        pal.set_current_system_time(std::time::UNIX_EPOCH + std::time::Duration::from_millis(100));
+        let repository_path = FilePath::new("/repos/cid");
+        pal.set_file(
+            "/repos/cid/.devcontainer/devcontainer.json",
+            "{\"image\":\"rust:1.85\"}",
+        );
+        let repository = Repository::new(
+            1,
+            "cid",
+            repository_path.clone(),
+            vec![BranchRule::new("main")],
+            Pipeline::for_devcontainer(Vec::new()),
+        );
+        let state_dir = temp_state_dir("runner-state-improper");
+
+        let runner = DockerRunner::new(
+            CidStateStore::new(state_dir.clone()),
+            PalHandle::new(pal.clone()),
+        );
+        let fingerprint = runner.devcontainer_fingerprint(&repository_path).unwrap();
+        let image_tag = runner.image_tag(&repository, &fingerprint);
+
+        pal.set_process_execution(
+            runner.build_devcontainer_build_command(&repository_path, &image_tag),
+            vec![ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(1),
+                stream: ProcessOutputStream::Stdout,
+                bytes: b"built\n".to_vec(),
+            })],
+            ProcessResult {
+                started_at: Timestamp::new(0),
+                finished_at: Timestamp::new(2),
+                exit_code: Some(0),
+            },
+        );
+        pal.push_process_execution(
+            runner.build_ci_exec_command(&repository_path),
+            vec![ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(5),
+                stream: ProcessOutputStream::Stderr,
+                bytes: b"Shell server terminated (code: 255, signal: null)\n\nError: can only create exec sessions on running containers: container state improper\n".to_vec(),
+            })],
+            ProcessResult {
+                started_at: Timestamp::new(4),
+                finished_at: Timestamp::new(6),
+                exit_code: Some(255),
+            },
+        );
+        pal.set_process_execution(
+            runner.build_devcontainer_up_command(&repository_path),
+            vec![ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(7),
+                stream: ProcessOutputStream::Stdout,
+                bytes: b"started\n".to_vec(),
+            })],
+            ProcessResult {
+                started_at: Timestamp::new(7),
+                finished_at: Timestamp::new(8),
+                exit_code: Some(0),
+            },
+        );
+        pal.push_process_execution(
+            runner.build_ci_exec_command(&repository_path),
+            vec![ProcessEvent::Output(ProcessOutputEvent {
+                timestamp: Timestamp::new(9),
+                stream: ProcessOutputStream::Stdout,
+                bytes: b"ok\n".to_vec(),
+            })],
+            ProcessResult {
+                started_at: Timestamp::new(9),
+                finished_at: Timestamp::new(10),
+                exit_code: Some(0),
+            },
+        );
+
+        let mut runs = vec![Run::new(
+            1,
+            1,
+            "cid",
+            "main",
+            "abc1234",
+            100,
+            vec![RunStep::new(
+                "ci",
+                "./scripts/ci.sh",
+                "devcontainer",
+                Vec::new(),
+            )],
+        )];
+        let executed = runner
+            .execute_queued_runs(std::slice::from_ref(&repository), &mut runs)
+            .unwrap();
+
+        assert_eq!(executed, 1);
+        assert_eq!(runs[0].status(), RunStatus::Passed);
         cleanup(&state_dir);
     }
 
