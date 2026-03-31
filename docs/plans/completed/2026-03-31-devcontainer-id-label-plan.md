@@ -115,13 +115,13 @@ Recommended order:
 
 # How should this work be tracked?
 
-- [ ] Add a helper that derives stable `--id-label` values from repository identity plus devcontainer fingerprint
-- [ ] Update `devcontainer up` command generation to include the id labels
-- [ ] Update `devcontainer exec` command generation to include the id labels
-- [ ] Refactor runner execution flow so id-label-based lookup is the primary container-selection mechanism
-- [ ] Reduce or remove the old stderr-matching stale-container detection path
-- [ ] Update runner tests for the label-based command shape and fallback behavior
-- [ ] Run `./scripts/check-code.sh`
+- [x] Add a helper that derives stable `--id-label` values from repository identity plus devcontainer fingerprint
+- [x] Update `devcontainer up` command generation to include the id labels
+- [x] Update `devcontainer exec` command generation to include the id labels
+- [x] Refactor runner execution flow so id-label-based lookup is the primary container-selection mechanism
+- [x] Reduce or remove the old stderr-matching stale-container detection path
+- [x] Update runner tests for the label-based command shape and fallback behavior
+- [x] Run `./scripts/check-code.sh`
 
 # How should this be verified?
 

@@ -109,7 +109,8 @@ impl DockerRunner {
 
             let (output, log_output) =
                 if repository.pipeline().image() == "devcontainer" && step_name == "ci" {
-                    self.execute_devcontainer_ci_step(&repository_path)?
+                    let id_labels = self.devcontainer_id_labels(repository, &fingerprint);
+                    self.execute_devcontainer_ci_step(&repository_path, &id_labels)?
                 } else {
                     let command = self.build_command(&repository_path, step_name.as_str())?;
                     let mut sink = OutputCollector::default();
@@ -221,11 +222,13 @@ impl DockerRunner {
 
     pub fn build_command(
         &self,
-        repository_path: &cid_base::file_path::FilePath,
+        _repository_path: &cid_base::file_path::FilePath,
         step_name: &str,
     ) -> CidResult<ProcessCommand> {
         match step_name {
-            "ci" => Ok(self.build_ci_exec_command(repository_path)),
+            "ci" => Err(cid_base::err!(
+                "devcontainer ci commands require repository identity"
+            )),
             _ => Err(cid_base::err!("unsupported run step `{step_name}`")),
         }
     }
@@ -257,22 +260,30 @@ impl DockerRunner {
     pub fn build_ci_exec_command(
         &self,
         repository_path: &cid_base::file_path::FilePath,
+        id_labels: &[String],
     ) -> ProcessCommand {
         let config_path = repository_path
             .join(".devcontainer")
             .join("devcontainer.json");
+        let mut arguments = vec![
+            "exec".into(),
+            "--workspace-folder".into(),
+            repository_path.as_str().into(),
+            "--config".into(),
+            config_path.as_str().into(),
+        ];
+        for id_label in id_labels {
+            arguments.push("--id-label".into());
+            arguments.push(id_label.clone().into());
+        }
+        arguments.extend(vec![
+            "/bin/sh".into(),
+            "-lc".into(),
+            "./scripts/ci.sh".into(),
+        ]);
         ProcessCommand {
             executable: "devcontainer".into(),
-            arguments: vec![
-                "exec".into(),
-                "--workspace-folder".into(),
-                repository_path.as_str().into(),
-                "--config".into(),
-                config_path.as_str().into(),
-                "/bin/sh".into(),
-                "-lc".into(),
-                "./scripts/ci.sh".into(),
-            ],
+            arguments,
             working_directory: Some(repository_path.clone()),
             environment: Vec::new(),
         }
@@ -281,19 +292,25 @@ impl DockerRunner {
     pub fn build_devcontainer_up_command(
         &self,
         repository_path: &cid_base::file_path::FilePath,
+        id_labels: &[String],
     ) -> ProcessCommand {
         let config_path = repository_path
             .join(".devcontainer")
             .join("devcontainer.json");
+        let mut arguments = vec![
+            "up".into(),
+            "--workspace-folder".into(),
+            repository_path.as_str().into(),
+            "--config".into(),
+            config_path.as_str().into(),
+        ];
+        for id_label in id_labels {
+            arguments.push("--id-label".into());
+            arguments.push(id_label.clone().into());
+        }
         ProcessCommand {
             executable: "devcontainer".into(),
-            arguments: vec![
-                "up".into(),
-                "--workspace-folder".into(),
-                repository_path.as_str().into(),
-                "--config".into(),
-                config_path.as_str().into(),
-            ],
+            arguments,
             working_directory: Some(repository_path.clone()),
             environment: Vec::new(),
         }
@@ -375,6 +392,13 @@ impl DockerRunner {
         format!("cid-devcontainer-{slug}:{short}")
     }
 
+    fn devcontainer_id_labels(&self, repository: &Repository, fingerprint: &str) -> Vec<String> {
+        vec![
+            format!("cid.repository={}", slugify(repository.name())),
+            format!("cid.devcontainer-fingerprint={fingerprint}"),
+        ]
+    }
+
     fn read_devcontainer_build_metadata(
         &self,
         repository: &Repository,
@@ -435,14 +459,15 @@ impl DockerRunner {
     fn execute_devcontainer_ci_step(
         &self,
         repository_path: &cid_base::file_path::FilePath,
+        id_labels: &[String],
     ) -> CidResult<(CidResult<cid_pal::process_result::ProcessResult>, String)> {
-        let exec_command = self.build_ci_exec_command(repository_path);
+        let exec_command = self.build_ci_exec_command(repository_path, id_labels);
         let mut exec_sink = OutputCollector::default();
         let exec_output = self.pal.run_process(&exec_command, &mut exec_sink);
         let exec_log_output = format_process_output(&exec_sink);
 
         if should_retry_devcontainer_exec(&exec_output, &exec_log_output) {
-            let up_command = self.build_devcontainer_up_command(repository_path);
+            let up_command = self.build_devcontainer_up_command(repository_path, id_labels);
             let mut up_sink = OutputCollector::default();
             let up_output = self.pal.run_process(&up_command, &mut up_sink);
             let up_log_output = format_process_output(&up_sink);
@@ -738,10 +763,16 @@ mod tests {
             CidStateStore::new(FilePath::new("/tmp/cid-state")),
             PalHandle::new(pal),
         );
+        let repository = Repository::new(
+            1,
+            "cid",
+            FilePath::new("/repos/cid"),
+            vec![BranchRule::new("main")],
+            Pipeline::for_devcontainer(Vec::new()),
+        );
+        let id_labels = runner.devcontainer_id_labels(&repository, "abc123");
 
-        let command = runner
-            .build_command(&FilePath::new("/repos/cid"), "ci")
-            .unwrap();
+        let command = runner.build_ci_exec_command(&FilePath::new("/repos/cid"), &id_labels);
 
         assert_eq!(command.executable.as_str(), "devcontainer");
         assert_eq!(
@@ -756,6 +787,10 @@ mod tests {
                 "/repos/cid",
                 "--config",
                 "/repos/cid/.devcontainer/devcontainer.json",
+                "--id-label",
+                "cid.repository=cid",
+                "--id-label",
+                "cid.devcontainer-fingerprint=abc123",
                 "/bin/sh",
                 "-lc",
                 "./scripts/ci.sh",
@@ -770,8 +805,17 @@ mod tests {
             CidStateStore::new(FilePath::new("/tmp/cid-state")),
             PalHandle::new(pal),
         );
+        let repository = Repository::new(
+            1,
+            "cid",
+            FilePath::new("/repos/cid"),
+            vec![BranchRule::new("main")],
+            Pipeline::for_devcontainer(Vec::new()),
+        );
+        let id_labels = runner.devcontainer_id_labels(&repository, "abc123");
 
-        let command = runner.build_devcontainer_up_command(&FilePath::new("/repos/cid"));
+        let command =
+            runner.build_devcontainer_up_command(&FilePath::new("/repos/cid"), &id_labels);
 
         assert_eq!(command.executable.as_str(), "devcontainer");
         assert_eq!(
@@ -786,6 +830,10 @@ mod tests {
                 "/repos/cid",
                 "--config",
                 "/repos/cid/.devcontainer/devcontainer.json",
+                "--id-label",
+                "cid.repository=cid",
+                "--id-label",
+                "cid.devcontainer-fingerprint=abc123",
             ]
         );
     }
@@ -866,7 +914,15 @@ mod tests {
 
         let repository_path =
             resolve_repository_path(&FilePath::new("sandboxes/cid-rust-sandbox")).unwrap();
-        let command = runner.build_ci_exec_command(&repository_path);
+        let repository = Repository::new(
+            1,
+            "cid-rust-sandbox",
+            FilePath::new("sandboxes/cid-rust-sandbox"),
+            vec![BranchRule::new("main")],
+            Pipeline::for_devcontainer(Vec::new()),
+        );
+        let id_labels = runner.devcontainer_id_labels(&repository, "abc123");
+        let command = runner.build_ci_exec_command(&repository_path, &id_labels);
 
         assert_eq!(command.executable.as_str(), "devcontainer");
         assert_eq!(
@@ -884,6 +940,10 @@ mod tests {
                     .join(".devcontainer")
                     .join("devcontainer.json")
                     .as_str(),
+                "--id-label",
+                "cid.repository=cid-rust-sandbox",
+                "--id-label",
+                "cid.devcontainer-fingerprint=abc123",
                 "/bin/sh",
                 "-lc",
                 "./scripts/ci.sh",
@@ -951,6 +1011,10 @@ mod tests {
                     "/repos/cid".into(),
                     "--config".into(),
                     "/repos/cid/.devcontainer/devcontainer.json".into(),
+                    "--id-label".into(),
+                    "cid.repository=cid".into(),
+                    "--id-label".into(),
+                    format!("cid.devcontainer-fingerprint={fingerprint}").into(),
                     "/bin/sh".into(),
                     "-lc".into(),
                     "./scripts/ci.sh".into(),
@@ -1022,6 +1086,7 @@ mod tests {
         );
         let fingerprint = runner.devcontainer_fingerprint(&repository_path).unwrap();
         let image_tag = runner.image_tag(&repository, &fingerprint);
+        let id_labels = runner.devcontainer_id_labels(&repository, &fingerprint);
 
         pal.set_process_execution(
             runner.build_devcontainer_build_command(&repository_path, &image_tag),
@@ -1037,7 +1102,7 @@ mod tests {
             },
         );
         pal.push_process_execution(
-            runner.build_ci_exec_command(&repository_path),
+            runner.build_ci_exec_command(&repository_path, &id_labels),
             vec![ProcessEvent::Output(ProcessOutputEvent {
                 timestamp: Timestamp::new(5),
                 stream: ProcessOutputStream::Stderr,
@@ -1050,7 +1115,7 @@ mod tests {
             },
         );
         pal.set_process_execution(
-            runner.build_devcontainer_up_command(&repository_path),
+            runner.build_devcontainer_up_command(&repository_path, &id_labels),
             vec![ProcessEvent::Output(ProcessOutputEvent {
                 timestamp: Timestamp::new(7),
                 stream: ProcessOutputStream::Stdout,
@@ -1063,7 +1128,7 @@ mod tests {
             },
         );
         pal.push_process_execution(
-            runner.build_ci_exec_command(&repository_path),
+            runner.build_ci_exec_command(&repository_path, &id_labels),
             vec![ProcessEvent::Output(ProcessOutputEvent {
                 timestamp: Timestamp::new(9),
                 stream: ProcessOutputStream::Stdout,
@@ -1128,6 +1193,7 @@ mod tests {
         );
         let fingerprint = runner.devcontainer_fingerprint(&repository_path).unwrap();
         let image_tag = runner.image_tag(&repository, &fingerprint);
+        let id_labels = runner.devcontainer_id_labels(&repository, &fingerprint);
 
         pal.set_process_execution(
             runner.build_devcontainer_build_command(&repository_path, &image_tag),
@@ -1143,7 +1209,7 @@ mod tests {
             },
         );
         pal.push_process_execution(
-            runner.build_ci_exec_command(&repository_path),
+            runner.build_ci_exec_command(&repository_path, &id_labels),
             vec![ProcessEvent::Output(ProcessOutputEvent {
                 timestamp: Timestamp::new(5),
                 stream: ProcessOutputStream::Stderr,
@@ -1156,7 +1222,7 @@ mod tests {
             },
         );
         pal.set_process_execution(
-            runner.build_devcontainer_up_command(&repository_path),
+            runner.build_devcontainer_up_command(&repository_path, &id_labels),
             vec![ProcessEvent::Output(ProcessOutputEvent {
                 timestamp: Timestamp::new(7),
                 stream: ProcessOutputStream::Stdout,
@@ -1169,7 +1235,7 @@ mod tests {
             },
         );
         pal.push_process_execution(
-            runner.build_ci_exec_command(&repository_path),
+            runner.build_ci_exec_command(&repository_path, &id_labels),
             vec![ProcessEvent::Output(ProcessOutputEvent {
                 timestamp: Timestamp::new(9),
                 stream: ProcessOutputStream::Stdout,
@@ -1203,6 +1269,32 @@ mod tests {
         assert_eq!(executed, 1);
         assert_eq!(runs[0].status(), RunStatus::Passed);
         cleanup(&state_dir);
+    }
+
+    #[test]
+    fn devcontainer_id_labels_include_repository_and_fingerprint() {
+        let pal = PalMock::new();
+        let runner = DockerRunner::new(
+            CidStateStore::new(FilePath::new("/tmp/cid-state")),
+            PalHandle::new(pal),
+        );
+        let repository = Repository::new(
+            1,
+            "cid rust sandbox",
+            FilePath::new("/repos/cid"),
+            vec![BranchRule::new("main")],
+            Pipeline::for_devcontainer(Vec::new()),
+        );
+
+        let id_labels = runner.devcontainer_id_labels(&repository, "abc123");
+
+        assert_eq!(
+            id_labels,
+            vec![
+                "cid.repository=cid-rust-sandbox".to_string(),
+                "cid.devcontainer-fingerprint=abc123".to_string(),
+            ]
+        );
     }
 
     fn temp_state_dir(prefix: &str) -> FilePath {
